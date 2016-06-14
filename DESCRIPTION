@@ -1,0 +1,10 @@
+Package: biostan
+Type: Package
+Title: Introduction to Bayesian Inference using Stan with Applications to Cancer Genomics (BioC2016)
+Version: 0.1.0
+Author: Jacki Buros Novik <jackinovik@gmail.com>, Ben Goodrich <ben.goodrich@gmail.com>, Eric Novik <Eric.Novik@gmail.com>
+Maintainer: Jacki Buros Novik <jackinovik@gmail.com>
+Description: Companion package for the BioC-2016 workshop "Introduction to Bayesian Inference using Stan with Applications to Cancer Genomics".
+  Contains sample data & vignettes for Stan intro material & applied models
+License: GPL-3
+LazyData: TRUE
