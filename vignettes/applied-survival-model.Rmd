@@ -273,7 +273,8 @@ This displays best-practice diagnostics (e.g. autocorrelation of chains) in an e
 
 ```{r}
 library(shinystan)
-launch_shinystan(wei_fit)
+if (interactive())
+    launch_shinystan(wei_fit)
 ```
 
 #### Posterior predictive checks
