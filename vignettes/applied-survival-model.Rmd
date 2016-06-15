@@ -243,6 +243,8 @@ Note that it's not surprising for us to have a fair number of implausible parame
 
 Next we try running this for more iterations and on multiple chains. 
 
+*NB: here we reference the earlier fitted object instead of passing in the model code directly*
+
 ```{r}
 wei_fit <- rstan::stan(fit = test_fit, data = stan_data, iter = 1000, chains = 4, init = make_inits(1, 1))
 print(wei_fit)
@@ -259,11 +261,13 @@ The only two parameters needed to specify these are `alpha` & `mu`.
 ```{r}
 sim_post_predict <- function(alpha, mu, Nobs, Ncen) {
     observed_data <- data.frame(os_status = rep_len('DECEASED', Nobs),
-                                os_months = rweibull(n = Nobs, alpha, exp(-(mu)/alpha))
+                                os_months = rweibull(n = Nobs, alpha, exp(-(mu)/alpha)),
+                                stringsAsFactors = F
                                 )
     
     censored_data <- data.frame(os_status = rep_len('LIVING', Ncen),
-                                os_months = runif(n = Ncen) * rweibull(Ncen, alpha, exp(-(mu)/alpha))
+                                os_months = runif(n = Ncen) * rweibull(Ncen, alpha, exp(-(mu)/alpha)),
+                                stringsAsFactors = F
                                 )
     
     return(observed_data %>% bind_rows(censored_data))
@@ -299,21 +303,149 @@ ggplot(sim_post_predict(alpha = mean_estimated_alpha, mu = mean_estimated_mu, No
     facet_wrap(~type, ncol = 1)
 ```
 
+Plotting as a survival curve
+
+```{r}
+library(gridExtra)
+library(ggfortify)
+sim_post_data <- sim_post_predict(alpha = mean_estimated_alpha, mu = mean_estimated_mu, Nobs = nrow(observed_data), Ncen = nrow(censored_data))
+simppd.surv <- survival::survfit(Surv(os_months,os_deceased) ~ 1, data = sim_post_data %>% dplyr::mutate(os_deceased = os_status == 'DECEASED'))
+simplot <- autoplot(simppd.surv) + ggtitle('Simulated data')
+mleplot <- autoplot(mle.surv) + ggtitle('Actual data')
+grid.arrange(simplot, mleplot, ncol = 2)
+```
+
+Overlaying observed & simulated survival curves (still using posterior mean of parameters)
+
+```{r}
+ggplot(data = 
+           fortify(simppd.surv) %>% 
+           mutate(src = 'posterior predicted values') %>% 
+           bind_rows(fortify(mle.surv) %>% mutate(src = 'actual data')),
+       aes(x = time, group = src)) + 
+    geom_line(aes(y = surv, colour = src)) + 
+    geom_ribbon(aes(ymin = lower, ymax = upper, fill = src), alpha = 0.2) +
+    ggtitle('Survival curve for observed and posterior predicted event times \n (simulated according to mean of posterior parameter estimates)')
+```
+
+#### Further posterior predictive checking
+
+But, this is only an approximation to the true posterior predictive checks we want to do. The means of the parameter estimates don't reflect our true uncertainty in the parameter estimates.
+
+To get to this point, we will want to repeat the above-described process *for each draw from the posterior*.
+
+Let's do this now.
+
+First let's review how to extract the parameters from the stanfit object.
+
+```{r}
+pp_mu <- extract(wei_fit, 'mu')$mu
+str(pp_mu)
+```
+
+Why do we have 2000 values? 
+
+(answer: 4 chains * 1000 iterations / 2 since by default warmup iters are dropped)
+
+We should have a similar structure of values for `alpha`.
+
+```{r}
+pp_alpha <- extract(wei_fit, 'alpha')$alpha
+str(pp_alpha)
+```
+
+To get the estimated variance in our survival curves, we will want to apply the same steps we did above (using the single point-estimate of the mean of alpha & mu) to each iteration.
+
+Thanks to @hadley, we can do this using `purrr`.
+
+```{r}
+models <- 
+    purrr::map2(pp_alpha, pp_mu, ~ sim_post_predict(alpha = .x, mu = .y, Nobs = nrow(observed_data), Ncen = nrow(censored_data))) %>%
+    purrr::map(~ dplyr::mutate(., os_deceased = os_status == 'DECEASED')) %>%
+    purrr::map(~ survival::survfit(Surv(os_months, os_deceased) ~ 1, data = .)) %>%
+    purrr::map(fortify)
+```
+
+We should now have 2000 estimates of the survival curve, one for each post-warmup draw.
+
+```{r}
+class(models)
+length(models)
+head(models[[1]])
+```
+
+How to summarize the estimated uncertainty in our survival curve?
+
+(A: For each observed time, we want to summarize the distribution of `surv` estimates)
+
+Problem is, we don't observe the same timepoints for each iteration. One way to address this would be to aggregate the data for intervals of time.
+
+```{r}
+models_agg <- 
+    models %>%
+    purrr::map(~ dplyr::mutate(., time_group = floor(time))) %>%
+    dplyr::bind_rows() %>%
+    dplyr::group_by(time_group) %>%
+    dplyr::summarize(surv_mean = mean(surv)
+                     , surv_p50 = median(surv)
+                     , surv_lower = quantile(surv, probs = 0.025)
+                     , surv_upper = quantile(surv, probs = 0.975)
+                     ) %>%
+    dplyr::ungroup()
+
+ggplot(models_agg, aes(x = time_group)) + geom_line(aes(y = surv_mean)) + geom_ribbon(aes(ymin = surv_lower, ymax = surv_upper), alpha = 0.2) + xlim(c(0, max(clin_data$os_months)))
+```
 
 
+Comparing posterior predicted intervals with observed data 
+
+```{r}
+
+ggplot(data = 
+           models_agg %>% 
+           dplyr::mutate(src = 'posterior predicted values (sampled)') %>% 
+           dplyr::rename(time = time_group, surv = surv_mean, lower = surv_lower, upper = surv_upper) %>%
+           bind_rows(fortify(mle.surv) %>% mutate(src = 'actual data')),
+       aes(x = time, group = src)) + 
+    geom_line(aes(y = surv, colour = src)) + 
+    geom_ribbon(aes(ymin = lower, ymax = upper, fill = src), alpha = 0.2) +
+    xlim(c(0, max(clin_data$os_months))) +
+    ggtitle('Survival curve for observed and posterior predicted event times')
+
+
+```
     
-                                
-}
-data <- list()
-for (o in c("obs", "cen")){
-    names <- c(sprintf("N%s%s", o, g), sprintf("X%s_bg%s", o, g), sprintf("X%s_biom%s", o, g), sprintf("y%s%s", o, g))
-    data[[names[1]]] <- get(names[1]);
-    data[[names[2]]] <- randn(get(names[1]), M_bg)
-    data[[names[3]]] <- randn(get(names[1]), M_biom)
-#    data[[names[4]]] <- rand_times(get(names[1]))
-    if (o == "obs") data[[names[4]]] <- rweibull(get(names[1]), alfa[i], exp(-(data[[names[2]]] %*% bbg[[i]] + data[[names[3]]] %*% bbiom[[i]])/alfa[i]))
-    if (o == "cen") data[[names[4]]] <- runif(get(names[1])) * rweibull(get(names[1]), alfa[i], exp(-(data[[names[2]]] %*% bbg[[i]] + data[[names[3]]] %*% bbiom[[i]])/alfa[i]))
-}
+
+Comparing actual & approximate posterior estimates 
+
+```{r}
+ggplot(data = 
+           models_agg %>% 
+           dplyr::mutate(src = 'posterior predicted values (sampled)') %>% 
+           dplyr::rename(time = time_group, surv = surv_mean, lower = surv_lower, upper = surv_upper) %>%
+           bind_rows(fortify(mle.surv) %>% mutate(src = 'actual data')) %>%
+           bind_rows(fortify(simppd.surv) %>% mutate(src = 'posterior predicted values (using mean)')),
+       aes(x = time, group = src)) + 
+    geom_line(aes(y = surv, colour = src)) + 
+    geom_ribbon(aes(ymin = lower, ymax = upper, fill = src), alpha = 0.2) +
+    xlim(c(0, max(clin_data$os_months))) +
+    ggtitle('Survival curve for observed and posterior predicted event times')
+```
 
 
+What if we computed this a different way?  IE pooling together all posterior predicted event times into one big data set.
+
+Would this be a more correct summary than the above? 
+
+```{r}
+ppd_data <- 
+    purrr::map2(pp_alpha, pp_mu, ~ sim_post_predict(alpha = .x, mu = .y, Nobs = nrow(observed_data), Ncen = nrow(censored_data))) %>%
+    purrr::map(~ dplyr::mutate(., os_deceased = os_status == 'DECEASED')) %>%
+    dplyr::bind_rows()
+
+simppd2.surv <- survival::survfit(Surv(os_months, os_deceased) ~ 1, data = ppd_data)
+
+## not run due to processing constraints: 
+## autoplot(simppd2.surv)
+```
 
