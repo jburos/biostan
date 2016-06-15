@@ -8,10 +8,8 @@
 #'
 #' This package contains vignettes & utility functions in support of the BioC 2016 workshop.
 #'
-#' @section utilities
+#' @import dplyr tidyr httr readr cgdsr dplyr ggplot2 gridExtra ggfortify rstan survival assertthat
+#' @import purrr shinystan
 #'
-#' @section vignettes
-#'
-#' @import dplyr, tidyr, httr, readr, cgdsr, dplyr, ggplot2, gridExtra, ggfortify, rstan, survival, assertthat
-#' @import purrr, shinystan
+#' @name biostan
 NULL
