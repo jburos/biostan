@@ -250,6 +250,32 @@ wei_fit <- rstan::stan(fit = test_fit, data = stan_data, iter = 1000, chains = 4
 print(wei_fit)
 ```
 
+#### Checking convergence
+
+Convergence can be assessed in various ways.
+
+For a quick indication, we can look at the Rhat values in the summary table above.
+
+We then also look at the traceplot of the log-posterior 
+
+```{r}
+rstan::traceplot(wei_fit, c('lp__'), ncol = 1)
+```
+
+And, for key parameters (in this case, `alpha` & `mu`)
+
+```{r}
+rstan::traceplot(wei_fit, c('alpha','mu'), ncol = 1)
+```
+
+For more detailed model inspection we can leverage the awesome `shinystan`. 
+This displays best-practice diagnostics (e.g. autocorrelation of chains) in an easy-to-use interface.
+
+```{r}
+library(shinystan)
+launch_shinystan(wei_fit)
+```
+
 #### Posterior predictive checks
 
 We can simulate draws from the posterior predictive distribution in R or in stan. 
