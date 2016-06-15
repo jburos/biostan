@@ -1,7 +1,6 @@
 Package: biostan
 Type: Package
-Title: Introduction to Bayesian Inference using Stan with Applications to Cancer
-    Genomics (BioC2016)
+Title: Intro to Stan for BioC2016 workshop
 Version: 0.1.0
 Authors@R: as.person(c(
     "Jacki Buros <jackinovik@gmail.com> [aut, cre]",
