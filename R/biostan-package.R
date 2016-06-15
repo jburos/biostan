@@ -13,5 +13,5 @@
 #' @section vignettes
 #'
 #' @import dplyr, tidyr, httr, readr, cgdsr, dplyr, ggplot2, gridExtra, ggfortify, rstan, survival, assertthat
-#' @import purrr
+#' @import purrr, shinystan
 NULL
