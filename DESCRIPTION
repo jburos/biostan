@@ -8,3 +8,6 @@ Description: Companion package for the BioC-2016 workshop "Introduction to Bayes
   Contains sample data & vignettes for Stan intro material & applied models
 License: GPL-3
 LazyData: TRUE
+Suggests: knitr,
+    rmarkdown
+VignetteBuilder: knitr
