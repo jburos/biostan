@@ -1,0 +1,319 @@
+---
+title: "Applied Survival Models"
+author: "Jacqueline Buros Novik"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Applied survival models}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+Survival modeling is a core component of any clinical data analysis toolset.
+
+Right-censoring is by far the most common scenario, since patients cannot be followed indefinitely. There is also valuable information in the distribution of times to events, even in cases where all patients experience an outcome.
+
+Fitting survival models in Stan is fairly straightforward. In this section, we will describe the model, fit the model to simulated data, and illustrate with an applied example.
+
+The last part of this vignette includes some suggestions of ways to extend the standard Cox Proportional Hazards model. We will get to these if time allows.
+
+## Background
+
+In a survival modeling context, the dependent variable of interest is typically *time to event*. 
+
+We will start by considering a single source of failure (death) vs censored observations.
+
+In general, there are parametric & non-parametric survival models. Here we will be 
+
+## Data
+
+We will illustrate this analysis using data from [The Cancer Genoma Atlas (TCGA)](https://tcga-data.nci.nih.gov) for patients diagnosed with Bladder Urothelial Carcinoma.
+
+The complete clinical & molecular data are available from TCGA data portals, but in this case we will use a curated version of these data available from <http://www.cbioportal.org/>.
+
+We *could* query these data via the web-url service: 
+
+```{r, eval = FALSE}
+library(httr)
+library(readr)
+url <- 'http://www.cbioportal.org/webservice.do?cmd=getClinicalData&case_set_id=blca_tcga_all'
+req <- httr::GET(url)
+clinical_data <- httr::content(req, type = 'text/tab-separated-values', col_names = T, col_types = NULL)
+str(clinical_data)
+```
+
+However, MSKCC has provided the [CGDS-R](http://cran.r-project.org/web/packages/cgdsr/index.html) package, which makes this just as easy.
+
+```{r}
+library(cgdsr)
+mycgds = cgdsr::CGDS("http://www.cbioportal.org/public-portal/")
+selected_case_list = 'blca_tcga_all'
+clinical_data = cgdsr::getClinicalData(mycgds, selected_case_list)
+str(clinical_data)
+```
+
+Let's do some minimal data manipulation on these data before going any further. We will save the converted data in a data.frame called `clin_data`.
+
+```{r}
+library(purrr)
+library(dplyr)
+
+## names to lower case
+names(clinical_data) <- tolower(names(clinical_data))
+
+## convert empty strings -> NA values
+convert_blank_to_na <- function(x) {
+    if (!purrr::is_character(x)) {
+        warning('input vector is not character - returning original input')
+        return(x)
+    } else {
+        ifelse(x == '', NA, x)
+    }
+}
+clin_data <- clinical_data %>%
+    dplyr::mutate_each(funs = funs(convert_blank_to_na), everything())
+str(clin_data)
+```
+
+## First pass: overall survival
+
+Our first pass will treat mortality as the primary endpoint. 
+
+### Data prep
+
+The relevant data are contained within two variables: os_status & os_months. 
+
+For various reasons, these data include one observation with missing data for Overall Survival
+
+```{r}
+clinical_data %>%
+    dplyr::filter(is.na(os_status) | os_status == '') %>%
+    str()
+```
+
+In addition, we have a 3 observations with unknown and/or negative survival times (`os_months` < 0).
+
+```{r}
+clinical_data %>%
+    dplyr::filter(!is.na(os_status) & os_status != '') %>%
+    dplyr::filter(os_months < 0 | is.na(os_months)) %>%
+    dplyr::select(os_status, os_months) %>%
+    head()
+```
+
+We will remove these observations from our analysis dataset (clin_data) for now.
+
+```{r}
+library(assertthat)
+clin_data <- 
+    clin_data %>%
+    dplyr::filter(!is.na(os_status) & os_status != '') %>%
+    dplyr::filter(os_months >= 0 & !is.na(os_months))
+
+## at this point, we should have 4 fewer observations than our original dataset. Let's confirm this.
+assert_that(nrow(clin_data) == nrow(clinical_data) - 4)
+```
+
+### Data exploration
+
+We will do some minimal data exploration before attempting to fit the model.
+
+Summarize distribution of event times by failure type
+
+```{r}
+clin_data %>%
+    split(.$os_status) %>%
+    purrr::map(~ summary(.$os_months))
+```
+
+And, graphically
+
+```{r}
+library(ggplot2)
+ggplot(clin_data, aes(x = os_months, group = os_status, colour = os_status, fill = os_status)) + 
+    geom_density(alpha = 0.5)
+```
+
+Let's look at the MLE estimate of the survival function for these data. This will give us a benchmark for future evaluations.
+
+```{r}
+library(survival)
+mle.surv <- survfit(Surv(os_months,os_deceased) ~ 1, data = clin_data %>% dplyr::mutate(os_deceased = os_status == 'DECEASED'))
+plot(mle.surv)
+```
+
+## A parametric survival model
+
+For our first analysis we will implement a parametric survival model implemented by [Peltola et al (2014)](http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf). 
+
+#### Stan code for the model
+
+The Stan file for this model is adapted from their accompanying [github repo](https://github.com/to-mi/stan-survival-shrinkage).
+
+```{r}
+stan_code <- httr::content(httr::GET('https://raw.githubusercontent.com/to-mi/stan-survival-shrinkage/master/wei_gau.stan'), as = 'text')
+
+for (l in readLines(textConnection(stan_code)))
+    print(l)
+```
+
+#### Data inputs 
+
+Next, we prep a data input object which we will pass to Stan. This is a `list` and the type of each element in the list should match the components of the `data { ... }` block in our stan code.
+
+Let's review the data block again.
+
+```{r}
+for (l in readLines(textConnection(gsub(stan_code, pattern = '.*data \\{(.*?)\\}.*', replacement = "\\1")))) 
+    print(l)
+```
+
+Notice how the censored & observed data points are separated.
+
+In this case, we want to fit a NULL model but the stan code isn't written to accomodate the no-biomarker case. 
+
+Thus, we will instead fill in biomarker values of 0.
+
+```{r}
+observed_data <- clin_data %>%
+    dplyr::filter(os_status == 'DECEASED')
+
+censored_data <- clin_data %>%
+    dplyr::filter(os_status != 'DECEASED')
+
+stan_data <- list(
+    Nobs = nrow(observed_data),
+    Ncen = nrow(censored_data),
+    M_bg = 1,
+    M_biom = 1,
+    yobs = observed_data$os_months,
+    ycen = censored_data$os_months,
+    Xobs_bg = array(rep_len(0, nrow(observed_data)), dim = c(nrow(observed_data), 1)),
+    Xcen_bg = array(rep_len(0, nrow(censored_data)), dim = c(nrow(censored_data), 1)),
+    Xobs_biom = array(rep_len(0, nrow(observed_data)), dim = c(nrow(observed_data), 1)),
+    Xcen_biom = array(rep_len(0, nrow(censored_data)), dim = c(nrow(censored_data), 1))
+)
+str(stan_data)
+```
+
+#### Initial values
+
+Next, we wrap the [example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R#L88-L103) code in a function. 
+
+This will generate the initial values for each parameter in our stan code. This is a function so that we can initialize each chain to a different set of starting values.
+
+```{r}
+make_inits <- function(M_bg, M_biom) {
+    function()
+      list(
+        tau_s_bg_raw = 0.1*abs(rnorm(1)),
+        tau_bg_raw = array(abs(rnorm(M_bg)), dim = c(M_bg)),
+        tau_s1_biom_raw = 0.1*abs(rnorm(1)),
+        tau_s2_biom_raw = 0.1*abs(rnorm(1)),
+        tau_biom_raw = array(abs(rnorm(M_biom)), dim = c(M_biom)),
+        tau1_biom_raw = abs(rnorm(M_biom)),
+        tau2_biom_raw = abs(rnorm(M_biom)),
+        alpha_raw = 0.01*rnorm(1),
+        beta_bg_raw = array(rnorm(M_bg), dim = c(M_bg)),
+        beta_biom_raw = array(rnorm(M_biom), dim = c(M_biom)),
+        mu = rnorm(1)
+      )
+}
+## example : 
+str(make_inits(1, 1)())
+```
+
+#### Fitting the model
+
+We are now ready to try fitting the model to our data. 
+
+Personally, I test the code on a few iterations to confirm that my starting values are reasonable & that there are no problems executing the model code on the input data.
+
+I find it's best to test on a handful of iterations & on a single chain. This makes debugging easier.
+
+```{r}
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = min(4, parallel::detectCores()))
+
+test_fit <- rstan::stan(model_code = stan_code, data = stan_data, iter = 10, chains = 1, init = make_inits(1, 1))
+```
+
+Note that it's not surprising for us to have a fair number of implausible parameter values at this point. We are only a few iterations in. 
+
+Next we try running this for more iterations and on multiple chains. 
+
+```{r}
+wei_fit <- rstan::stan(fit = test_fit, data = stan_data, iter = 1000, chains = 4, init = make_inits(1, 1))
+print(wei_fit)
+```
+
+#### Posterior predictive checks
+
+We can simulate draws from the posterior predictive distribution in R or in stan. 
+
+Since the biomarker values given weren't informative, we only want to inspect the baseline hazard or survival functions.
+
+The only two parameters needed to specify these are `alpha` & `mu`.
+
+```{r}
+sim_post_predict <- function(alpha, mu, Nobs, Ncen) {
+    observed_data <- data.frame(os_status = rep_len('DECEASED', Nobs),
+                                os_months = rweibull(n = Nobs, alpha, exp(-(mu)/alpha))
+                                )
+    
+    censored_data <- data.frame(os_status = rep_len('LIVING', Ncen),
+                                os_months = runif(n = Ncen) * rweibull(Ncen, alpha, exp(-(mu)/alpha))
+                                )
+    
+    return(observed_data %>% bind_rows(censored_data))
+}
+
+## test these inputs for arbitrary values of alpha & mu
+sim_post_predict(alpha = 0.9, mu = -3.76, Nobs = nrow(observed_data), Ncen = nrow(censored_data)) %>%
+    head()
+```
+
+Let's plot the mean time to survival in our simulated data, using the posterior means
+
+```{r}
+
+mean_estimated_mu <- mean(rstan::extract(wei_fit, 'mu')$mu)
+mean_estimated_alpha <- mean(rstan::extract(wei_fit, 'alpha')$alpha)
+
+## plot distribution of survival times by event type
+ggplot(sim_post_predict(alpha = mean_estimated_alpha, mu = mean_estimated_mu, Nobs = nrow(observed_data), Ncen = nrow(censored_data))
+       , aes(x = os_months, group = os_status, colour = os_status, fill = os_status)) +
+    geom_density(alpha = 0.3)
+
+```
+
+How does this compare to the observed data?
+
+```{r}
+ggplot(sim_post_predict(alpha = mean_estimated_alpha, mu = mean_estimated_mu, Nobs = nrow(observed_data), Ncen = nrow(censored_data)) %>%
+           dplyr::mutate(type = 'posterior predicted values') %>%
+           bind_rows(clin_data %>% dplyr::mutate(type = 'actual data'))
+       , aes(x = os_months, group = os_status, colour = os_status, fill = os_status)) +
+    geom_density(alpha = 0.5) +
+    facet_wrap(~type, ncol = 1)
+```
+
+
+
+    
+                                
+}
+data <- list()
+for (o in c("obs", "cen")){
+    names <- c(sprintf("N%s%s", o, g), sprintf("X%s_bg%s", o, g), sprintf("X%s_biom%s", o, g), sprintf("y%s%s", o, g))
+    data[[names[1]]] <- get(names[1]);
+    data[[names[2]]] <- randn(get(names[1]), M_bg)
+    data[[names[3]]] <- randn(get(names[1]), M_biom)
+#    data[[names[4]]] <- rand_times(get(names[1]))
+    if (o == "obs") data[[names[4]]] <- rweibull(get(names[1]), alfa[i], exp(-(data[[names[2]]] %*% bbg[[i]] + data[[names[3]]] %*% bbiom[[i]])/alfa[i]))
+    if (o == "cen") data[[names[4]]] <- runif(get(names[1])) * rweibull(get(names[1]), alfa[i], exp(-(data[[names[2]]] %*% bbg[[i]] + data[[names[3]]] %*% bbiom[[i]])/alfa[i]))
+}
+
+
+
