@@ -26,7 +26,6 @@ library(purrr)
 library(dplyr)
 library(assertthat)
 library(ggplot2)
-
 library(survival)
 library(rstan)
 rstan_options(auto_write = TRUE)
@@ -34,7 +33,6 @@ options(mc.cores = min(4, parallel::detectCores()))
 library(shinystan)
 library(gridExtra)
 library(ggfortify)
-
 ```
 
 Survival modeling is a core component of any clinical data analysis toolset.
@@ -162,7 +160,9 @@ ggplot(clin_data, aes(x = os_months, group = os_status, colour = os_status, fill
     geom_density(alpha = 0.5)
 ```
 
-Let's look at the MLE estimate of the survival function for these data. This will give us a benchmark for future evaluations.
+Summarize MLE estimate of the survival function for these data and plot the KM survival curve for observed data. 
+
+These will give us a benchmark for future evaluations.
 
 ```{r mle-survfit}
 mle.surv <- survfit(Surv(os_months,os_deceased) ~ 1, data = clin_data %>% dplyr::mutate(os_deceased = os_status == 'DECEASED'))
@@ -192,7 +192,7 @@ Next, we prep a data input object which we will pass to Stan. This is a `list` a
 Let's review the data block again.
 
 ```{r view-data-block}
-for (l in readLines(textConnection(gsub(stan_code, pattern = '.*data \\{(.*?)\\}.*', replacement = "\\1")))) 
+for (l in readLines(textConnection(gsub(stan_code, pattern = '.*(data \\{.*?\\}).*', replacement = "\\1")))) 
     cat(l, '\n')
 ```
 
@@ -224,11 +224,17 @@ stan_data <- list(
 str(stan_data)
 ```
 
-#### Initial values
+## Initial values
 
-Next, we wrap the [example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R#L88-L103) code in a function. 
+Next, we want manually specify the initial values Stan will use when fitting the model. 
 
-This will generate the initial values for each parameter in our stan code. This is a function so that we can initialize each chain to a different set of starting values.
+It's important to hard-code these since many of our parameters (e.g. variance parameters) are constrained to be positive, so the default initial values (which range from -2 to 2) will not be ideal.
+
+The model authors provided us some example code ([example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R#L88-L103)) which we will modify to wrap in a function.
+
+Stan can either take initial values in the form of a function (as we use here) which will be called for each chain, a list of lists (one per chain), or if only one chain is used a simple list of inputs. In any of the above scenarios, `stan` is very particular about the dimension & type of inputs given.
+
+Here is the function we define (technically a functional):
 
 ```{r stan-init-values}
 make_inits <- function(M_bg, M_biom) {
@@ -247,11 +253,19 @@ make_inits <- function(M_bg, M_biom) {
         mu = rnorm(1)
       )
 }
-## example : 
-str(make_inits(1, 1)())
 ```
 
-#### Fitting the model
+This function will return a function which itself generates the initial values for each parameter in our stan code. It is a function wrapped in a function so that we can pass different values of `M_bg` & `M_biom`.
+
+If this isn't obvious to you, I recommend you take a look at the output for different values of `M_bg` & `M_biom`.
+
+for example:
+```{r illustrate-init-values}
+make_inits(1, 1)() %>%
+    str()
+```
+
+## Fitting the model
 
 We are now ready to try fitting the model to our data. 
 
@@ -260,21 +274,109 @@ Personally, I test the code on a few iterations to confirm that my starting valu
 I find it's best to test on a handful of iterations & on a single chain. This makes debugging easier.
 
 ```{r stan-test-fit}
-test_fit <- rstan::stan(model_code = stan_code, data = stan_data, iter = 10, chains = 1, init = make_inits(1, 1))
+test_fit <- rstan::stan(model_code = stan_code,
+                        data = stan_data,
+                        iter = 10,
+                        chains = 1,
+                        init = make_inits(1, 1))
 ```
 
 Note that it's not surprising for us to have a fair number of implausible parameter values at this point. We are only a few iterations in. 
+
+#### aside on input data types
+
+Aside: for an example of how sensitive `stan()` is to dimension of inputs, try running the following exercize.
+
+Compare the value of *a vector wrapped by `array()`*
+
+```{r stan-alt-inits1a}
+array(rnorm(0), dim = c(0))
+```
+
+with that of *a naked vector*
+
+```{r stan-alt-inits2a}
+rnorm(0)
+```
+
+These two look the same, don't they?
+
+**However, looks can be deceiving. **
+
+The data type stan is looking for is a `vector`: 
+
+```{r review-stan-params}
+for (l in 
+     readLines(textConnection(
+         gsub(stan_code,
+              pattern = '.*(parameters \\{.*?\\}).*',
+              replacement = '\\1'
+              )
+         ))
+     )
+    cat(l, '\n')
+```
+
+Ironically, the only way to force an R object to be a vector is to wrap it in the `array()` operator.
+
+For example, compare the structure of *a vector wrapped in an array* 
+
+```{r stan-alt-inits1b}
+str(array(rnorm(0), dim = c(0)))
+```
+
+with the structure of *a naked vector*
+
+```{r stan-alt-inits2b}
+str(rnorm(0))
+```
+
+These are different objects in the eyes of `stan`. 
+
+Notice what happens if we modify the `init` function to remove one of the `array()` wrappers listed above.
+
+```{r alt-inits}
+## alternate make-inits function for illustrative purposes
+alt_make_inits <- function(M_bg, M_biom) {
+    function()
+      list(
+        tau_s_bg_raw = 0.1*abs(rnorm(1)),
+        tau_bg_raw = abs(rnorm(M_bg)),  ### removed array() wrapper
+        tau_s1_biom_raw = 0.1*abs(rnorm(1)),
+        tau_s2_biom_raw = 0.1*abs(rnorm(1)),
+        tau_biom_raw = array(abs(rnorm(M_biom)), dim = c(M_biom)),
+        tau1_biom_raw = abs(rnorm(M_biom)),
+        tau2_biom_raw = abs(rnorm(M_biom)),
+        alpha_raw = 0.01*rnorm(1),
+        beta_bg_raw = array(rnorm(M_bg), dim = c(M_bg)),
+        beta_biom_raw = array(rnorm(M_biom), dim = c(M_biom)),
+        mu = rnorm(1)
+      )
+}
+test_fit2 <- rstan::stan(model_code = stan_code, data = stan_data, iter = 10, chains = 1, init = alt_make_inits(1, 1))
+
+```
+
+... something to watch out for when passing data to stan.
+
+## back to fitting model in stan
+
+OK. With that covered, let's get back to fitting our model.
 
 Next we try running this for more iterations and on multiple chains. 
 
 *NB: here we reference the earlier fitted object instead of passing in the model code directly*
 
 ```{r stan-actual-fit}
-wei_fit <- rstan::stan(fit = test_fit, data = stan_data, iter = 1000, chains = 4, init = make_inits(1, 1))
+wei_fit <- rstan::stan(fit = test_fit,
+                       data = stan_data,
+                       iter = 1000,
+                       chains = 4,
+                       init = make_inits(1, 1))
 print(wei_fit)
 ```
 
-#### Checking convergence
+## Checking convergence
 
 Convergence can be assessed in various ways.
 
@@ -300,7 +402,7 @@ if (interactive())
     launch_shinystan(wei_fit)
 ```
 
-#### Posterior predictive checks
+## Posterior predictive checks
 
 We can simulate draws from the posterior predictive distribution in R or in stan. 
 
@@ -376,7 +478,7 @@ ggplot(data =
     ggtitle('Survival curve for observed and posterior predicted event times \n (simulated according to mean of posterior parameter estimates)')
 ```
 
-#### Further posterior predictive checking
+## Further posterior predictive checking
 
 But, this is only an approximation to the true posterior predictive checks we want to do. The means of the parameter estimates don't reflect our true uncertainty in the parameter estimates.
 
@@ -481,13 +583,23 @@ ggplot(data =
 ```
 
 
-What if we computed this a different way?  IE pooling together all posterior predicted event times into one big data set.
+What if we computed this a different way?  
+
+IE pooling together all posterior predicted event times into one big data set.
 
 Would this be a more correct summary than the above? 
 
 ```{r}
 ppd_data <- 
-    purrr::map2(pp_alpha, pp_mu, ~ sim_post_predict(alpha = .x, mu = .y, Nobs = nrow(observed_data), Ncen = nrow(censored_data))) %>%
+    purrr::map2(
+        .x = pp_alpha,
+        .y = pp_mu,
+        .f = ~ sim_post_predict(alpha = .x,
+                                mu = .y,
+                                Nobs = nrow(observed_data),
+                                Ncen = nrow(censored_data)
+                                )
+        ) %>%
     purrr::map(~ dplyr::mutate(., os_deceased = os_status == 'DECEASED')) %>%
     dplyr::bind_rows()
 
