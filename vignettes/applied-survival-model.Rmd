@@ -62,7 +62,12 @@ We *could* query these data via the web-url service:
 ```{r example-load-data, eval = FALSE}
 url <- 'http://www.cbioportal.org/webservice.do?cmd=getClinicalData&case_set_id=blca_tcga_all'
 req <- httr::GET(url)
-clinical_data <- httr::content(req, type = 'text/tab-separated-values', col_names = T, col_types = NULL)
+clinical_data <- 
+    httr::content(req,
+                  type = 'text/tab-separated-values',
+                  col_names = T,
+                  col_types = NULL
+                  )
 str(clinical_data)
 ```
 
@@ -156,7 +161,12 @@ clin_data %>%
 Graphical summary of event times by type
 
 ```{r plot-os-months}
-ggplot(clin_data, aes(x = os_months, group = os_status, colour = os_status, fill = os_status)) + 
+ggplot(clin_data,
+       aes(x = os_months,
+           group = os_status,
+           colour = os_status,
+           fill = os_status
+           )) + 
     geom_density(alpha = 0.5)
 ```
 
@@ -165,42 +175,72 @@ Summarize MLE estimate of the survival function for these data and plot the KM s
 These will give us a benchmark for future evaluations.
 
 ```{r mle-survfit}
-mle.surv <- survfit(Surv(os_months,os_deceased) ~ 1, data = clin_data %>% dplyr::mutate(os_deceased = os_status == 'DECEASED'))
+mle.surv <- 
+    survfit(
+        Surv(os_months,os_deceased) ~ 1,
+        data = clin_data %>%
+            dplyr::mutate(os_deceased = os_status == 'DECEASED')
+    )
 plot(mle.surv)
 ```
 
 # First analysis: parametric survival model
 
-For our first analysis we will implement a parametric survival model implemented by [Peltola et al (2014)](http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf). 
+For our first analysis we will work with a parametric survival model implemented by [Peltola et al (2014)](http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf). 
+
+**Aside** This is a nice paper that compares performance across a variety of regularizing priors (horseshoe, gaussian, and LASSO) for survival analysis, and discusses a practical strategy for  evaluation of potential biomarkers.
 
 ## Stan code for the model
 
 The Stan file for this model is adapted from their accompanying [github repo](https://github.com/to-mi/stan-survival-shrinkage).
 
+We can load it directly from git into our session
+
 ```{r get-stan-code}
-stan_code_url <- 'https://raw.githubusercontent.com/to-mi/stan-survival-shrinkage/master/wei_gau.stan'
+stan_code_url <- 'https://raw.githubusercontent.com/to-mi/stan-survival-shrinkage/master/wei_bg.stan'
 stan_code <- httr::content(httr::GET(stan_code_url), as = 'text')
 
-for (l in readLines(textConnection(stan_code)))
-    cat(l,'\n')
+print_stan_code(stan_code)
 ```
 
-## Data inputs 
+## Prepare data input for stan 
 
-Next, we prep a data input object which we will pass to Stan. This is a `list` and the type of each element in the list should match the components of the `data { ... }` block in our stan code.
+In order to call stan, we must prepare a data input object which will be passed to the compiled stan program. 
+This input can be a `list` or an `environment` (since environments are implemented as lists). I prefer to 
+work with lists directly.
 
-Let's review the data block again.
+The structure and type of elements in this `list` must match the components of the `data { ... }` block in our Stan code.
+
+#### Review data block 
+
+Let's review the data block again to see what we need to pass in.
 
 ```{r view-data-block}
-for (l in readLines(textConnection(gsub(stan_code, pattern = '.*(data \\{.*?\\}).*', replacement = "\\1")))) 
-    cat(l, '\n')
+print_stan_code(stan_code, section = 'data')
 ```
 
-Notice how the censored & observed data points are separated.
+Notice how the censored & observed data points take separate input vectors. 
 
-In this case, we want to fit a NULL model but the stan code isn't written to accomodate the no-biomarker case. 
+**observed data points**
+* `Nobs`: number of observed data points 
+* `yobs`: times to observed events
+* `Xobs_bg`: "background" covariate values for observed data points
 
-Thus, we will instead fill in biomarker values of 0.
+**censored data points**
+* `Ncen`: number of censored data points 
+* `ycen`: times to censored events
+* `Xcen_bg`: "background" covariate values for censored data points
+
+In addition there is the dimension `M_bg`, indicating the number of covariates.
+
+In our case, we want to fit a NULL model (with no covariate values) but the Stan
+code isn't written to accomodate the no-biomarker case. (Try it to see how this works).
+
+For now, we will try to fit the model by filling in biomarker values of 0.
+
+#### Write the input data list
+
+Here we prepare the `list` object which we will pass to Stan
 
 ```{r stan-input-data}
 observed_data <- clin_data %>%
@@ -213,28 +253,35 @@ stan_data <- list(
     Nobs = nrow(observed_data),
     Ncen = nrow(censored_data),
     M_bg = 1,
-    M_biom = 1,
     yobs = observed_data$os_months,
     ycen = censored_data$os_months,
     Xobs_bg = array(rep_len(0, nrow(observed_data)), dim = c(nrow(observed_data), 1)),
-    Xcen_bg = array(rep_len(0, nrow(censored_data)), dim = c(nrow(censored_data), 1)),
-    Xobs_biom = array(rep_len(0, nrow(observed_data)), dim = c(nrow(observed_data), 1)),
-    Xcen_biom = array(rep_len(0, nrow(censored_data)), dim = c(nrow(censored_data), 1))
+    Xcen_bg = array(rep_len(0, nrow(censored_data)), dim = c(nrow(censored_data), 1))
 )
 str(stan_data)
 ```
 
-## Initial values
+## Setting initial values
 
-Next, we want manually specify the initial values Stan will use when fitting the model. 
+This next step is optional, but may be necessary for some models.
 
-It's important to hard-code these since many of our parameters (e.g. variance parameters) are constrained to be positive, so the default initial values (which range from -2 to 2) will not be ideal.
+For this example, we will set the initial parameters even though it's not strictly necessary. Sometimes I find it's useful and often not emphasized.
 
-The model authors provided us some example code ([example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R#L88-L103)) which we will modify to wrap in a function.
+By default, Stan chooses a random initial value for each parameter on the unconstrained scale between -2 and 2. The default selection is on the unconstrained support so that the initial values are guaranteed to be consistent with the constrained range.
 
-Stan can either take initial values in the form of a function (as we use here) which will be called for each chain, a list of lists (one per chain), or if only one chain is used a simple list of inputs. In any of the above scenarios, `stan` is very particular about the dimension & type of inputs given.
+When we pass the initial values in, however, these are on the constrained scale. The main goal is to select the initial values at random but within a range that is reasonable for the model. 
 
-Here is the function we define (technically a functional):
+### Plausible initial values 
+
+Let's review the parameters block for this model again.
+
+```{r}
+print_stan_code(stan_code, section = 'parameters')
+```
+
+### Function to specify initial values 
+
+Here is the function (functional) we define to provide initial values for each chain. This is based on the example code ([example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R#L88-L103)) file in the author's git repo.
 
 ```{r stan-init-values}
 make_inits <- function(M_bg, M_biom) {
@@ -269,16 +316,19 @@ make_inits(1, 1)() %>%
 
 We are now ready to try fitting the model to our data. 
 
+### Test the model 
+
 Personally, I test the code on a few iterations to confirm that my starting values are reasonable & that there are no problems executing the model code on the input data.
 
 I find it's best to test on a handful of iterations & on a single chain. This makes debugging easier.
 
 ```{r stan-test-fit}
-test_fit <- rstan::stan(model_code = stan_code,
-                        data = stan_data,
-                        iter = 10,
-                        chains = 1,
-                        init = make_inits(1, 1))
+test_fit <- 
+    rstan::stan(model_code = stan_code,
+                data = stan_data,
+                iter = 5,
+                chains = 1,
+                init = make_inits(1, 1))
 ```
 
 Note that it's not surprising for us to have a fair number of implausible parameter values at this point. We are only a few iterations in. 
@@ -333,6 +383,8 @@ str(rnorm(0))
 
 These are different objects in the eyes of `stan`. 
 
+#### input data types in practice 
+
 Notice what happens if we modify the `init` function to remove one of the `array()` wrappers listed above.
 
 ```{r alt-inits}
@@ -380,9 +432,17 @@ print(wei_fit)
 
 Convergence can be assessed in various ways.
 
-For a quick indication, we can look at the Rhat values in the summary table above.
+### Review Rhat values 
 
-We then also look at the traceplot of the log-posterior 
+For a quick indication, we can look at the Rhat values (Gelman-Rubin convergence diagnostic) in the summary table above.
+
+This is a useful gut-check, in that R-hat values far from 1 are a strong indication of a lack of convergence. Often the fix is as simple as running more iterations, or using a longer warmup sampling period.
+
+An R-hat value close to one, however, does not have high sensitivity. It does not guarantee convergence.
+
+### Inspect traceplots
+
+We then also look at the traceplot of the log-posterior. I usually check this first since it gives me a sense of the overall model fit.
 
 ```{r lp-traceplot}
 rstan::traceplot(wei_fit, c('lp__'), ncol = 1)
@@ -394,6 +454,8 @@ And, for key parameters (in this case, `alpha` & `mu`)
 rstan::traceplot(wei_fit, c('alpha','mu'), ncol = 1)
 ```
 
+### Launch shinystan 
+
 For more detailed model inspection we can leverage the awesome `shinystan`. 
 This displays best-practice diagnostics (e.g. autocorrelation of chains) in an easy-to-use interface.
 
@@ -404,7 +466,7 @@ if (interactive())
 
 ## Posterior predictive checks
 
-We can simulate draws from the posterior predictive distribution in R or in stan. 
+We can simulate draws from the posterior predictive distribution in R or in Stan. 
 
 Since the biomarker values given weren't informative, we only want to inspect the baseline hazard or survival functions.
 
@@ -418,7 +480,8 @@ sim_post_predict <- function(alpha, mu, Nobs, Ncen) {
                                 )
     
     censored_data <- data.frame(os_status = rep_len('LIVING', Ncen),
-                                os_months = runif(n = Ncen) * rweibull(Ncen, alpha, exp(-(mu)/alpha)),
+                                os_months_uncensored = rweibull(Ncen, alpha, exp(-(mu)/alpha)),
+                                os_months = 
                                 stringsAsFactors = F
                                 )
     
