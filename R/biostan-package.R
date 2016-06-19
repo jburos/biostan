@@ -9,7 +9,7 @@
 #' This package contains vignettes & utility functions in support of the BioC 2016 workshop.
 #'
 #' @import dplyr tidyr httr readr cgdsr dplyr ggplot2 gridExtra ggfortify rstan survival assertthat
-#' @import purrr shinystan
+#' @import purrr shinystan scales
 #'
 #' @name biostan
 NULL
