@@ -1,4 +1,3 @@
-
 #' prints a section of stan code to console
 #'
 #' @param stan_code (chr) text of stan code
@@ -30,4 +29,30 @@ print_stan_code <- function(stan_code, section = NULL) {
     ## print filtered code
     for (l in readLines(textConnection(filtered_stan_code)))
         cat(l, '\n')
+}
+
+#' reads a stan file into R
+#'
+#' @params path to stan file
+#'
+#' @import readr
+#'
+#' @returns character scalar containing stan code
+#' @export
+read_stan_file <- function(stan_file) {
+    readr::read_file(stan_file)
+}
+
+
+#' prints stan file to the console
+#'
+#' @param stan_file path to stan file
+#' @param ... (params to print_stan_code - ex: section)
+#'
+#' @import readr
+#'
+#' @returns character scalar containing stan code
+#' @export
+print_stan_file <- function(stan_file, ...) {
+    print_stan_code(read_stan_file(stan_file), ...)
 }
