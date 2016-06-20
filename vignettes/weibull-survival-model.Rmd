@@ -1,78 +1,125 @@
 ---
-title: "Vignette Title"
-author: "Vignette Author"
+title: "Model checking with simulated data (survival model example)"
+author: "Jacqueline Buros"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteIndexEntry{Model checking with simulated data (survival model example)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
+```{r setup, eval = T, results = 'hide', echo = F}
+knitr::opts_chunk$set(message = FALSE,
+                      warning = FALSE,
+                      fig.width = 6,
+                      fig.height = 4
+                      )
+```
+
+
+```{r load-packages, eval = T, echo = F}
+library(httr)
+library(readr)
+library(cgdsr)
+library(purrr)
+library(dplyr)
+library(assertthat)
+library(ggplot2)
+library(survival)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = min(4, parallel::detectCores()))
+library(shinystan)
+library(gridExtra)
+library(ggfortify)
+library(scales)
+library(biostan)
+```
+
 # First analysis: parametric survival model
 
-For our first analysis we will work with a parametric Weibull survival model 
-with a baseline hazard function 
+For our first analysis we will work with a parametric Weibull survival model. 
 
-  [[ weibull hazard function ]]
-  
-parameterized by `alpha` (a shape parameter) and a scale parameter `mu`. 
+We will start with model code adapted from  [wei_bg.stan](https://github.com/to-mi/stan-survival-shrinkage/blob/master/wei_bg.stan) within the [github repo]('http://github.com/to-mi/stan-survival-shrinkage') accompanying [Peltola et al, 2014](http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf)'s nice paper describing a bayesian approach to biomarker evaluation.
+
+This model assumes that the time to event `x` follows a Weibull distribution. 
+
+Stan parameterizes this probability density function as :
+
+$$f(x|\alpha,\sigma) = 
+\frac{\alpha}{\sigma}\left(\frac{x}{\sigma}\right)^{\alpha-1}e^{-(x/\sigma)^{\alpha}}$$
+
+In the context of this analysis, we will define two parameters:
+
+* `alpha` (called the shape parameter)
+* `mu` where $\sigma = e^\frac{-\mu}{\alpha}$.
+
+If we had covariates and wanted to estimate a proportional hazards model, we would replace `mu` with a linear combination of covariates. However, in this case we are interested in recovering features of our NULL model and so we treat `mu` as a constant intercept.
 
 ## Stan code for the model
 
-The stan code for the model is provided with this repo, in a file called 'weibull_survival_null_model.stan'.
+The stan code we will be using is provided in this [biostan package](http://github.com/jburos/biostan). 
 
-Let's review the contents of this file:
+It can be accessed via `system.file`, as :
 
-```{r}
-stan_file <- system.file('weibull_survival_null_model.stan', 'stan', 'biostan')
-stan_file <- 'inst/stan/weibull_survival_null_model.stan'
-print_stan_file(stan_file)
+```{r locate-stan-file}
+if (!require(biostan))
+    devtools::install_github('jburos/biostan')
+library(biostan)
+stan_file <- system.file('stan', 'weibull_survival_null_model.stan', package =  'biostan')
 ```
 
-**Aside** This code is adapted from a stan model ( (wei_bg.stan)[https://github.com/to-mi/stan-survival-shrinkage/blob/master/wei_bg.stan]) from the github repo accompanying (Peltola et al, 2014)[http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf].
+Here are the contents of this file:
+
+```{r print-stan-code}
+biostan::print_stan_file(stan_file)
+```
 
 ### The model in detail
 
-Before using this model on real data, we want to first review the model code & test it against some simulated data. This will ensure that (a) we understand the model well, and (b) the model can recover estimates from simulated data. 
+Before using this model for analysis, we want to first review the model code in detail & test it against some simulated data. 
 
-As you will see, several parts of the "simulate-data" process can also be re-used for posterior predictive checking. So we will save components of the process to be reused in later steps.
+This will ensure that (a) we understand the model well, and (b) the model can recover estimates from simulated data. 
 
-For now, let's start by reviewing the Stan code for this model.
+*( As you will see, several parts of the simulate-data process can also be re-used for posterior predictive checking. So we will save components of the process to be reused in later steps. )*
 
-If you're at an R console, you can open the Stan file in a browser as follows:
+If you're at an R console, you can open the Stan file in an editor as follows:
 
-```{r}
+```{r edit-stan-file}
 if (interactive())
     file.edit(stan_file)
 ```
 
 #### Review data block 
 
-Let's review the data block first. This will tell us the structure and format of inputs to the Stan function.
+Let's review the data block first. 
+
+This will tell us the structure and format of data input to the model.
 
 ```{r view-data-block}
-print_stan_code(stan_code, section = 'data')
+print_stan_file(stan_file, section = 'data')
 ```
 
-Notice how the censored & observed data points take separate input vectors. 
+The censored & observed data points are provided as separate input vectors. 
 
-**observed data points**
+*observed data points*
+
 * `Nobs`: number of observed data points 
 * `yobs`: times to observed events
 
-**censored data points**
+*censored data points*
+
 * `Ncen`: number of censored data points 
 * `ycen`: times to censored events
 
-In our case, we want to fit a NULL model (with no covariate values) to see how well
-the Weibull baseline hazard fits our data. Later we will fit a model with biomarker values. 
+Recall that this is a NULL model (with no covariate values), so the number & values of observed covariates are not needed.
 
 #### Review model block
 
-Our stan code contains an implicit constant term, in the linear predictor `mu`.
+The stan code contains an implicit constant term, in the linear predictor `mu`.
 
-```{r}
+```{r print-model-block}
 print_stan_file(stan_file, section = 'model')
 ```
 
@@ -89,33 +136,44 @@ Our stan code also contains a reparameterization of the `alpha` term, in the `tr
 
 Observe:
 
-```{r}
+```{r print-parameters-block}
 print_stan_file(stan_file, section = 'transformed parameters')
 ```
 
-(recall that `tau_al` is a constant scaling term, set to 10, and `alpha_raw` is a parameter with a normal(0, 1) prior distribution).
+(recall that `tau_al` is a constant scaling term set to 10, and `alpha_raw` is a parameter with a normal(0, 1) prior distribution).
 
 This reparameterization achieves two things : 
 
 1. The use of `tau_al * alpha_raw` is an example of a **non-centered parameterization**. 
-    - It would have been (mathematically) equivalent to define a (non-transformed) parameter `alpha` with a prior `normal(0, 10)`. 
-    - This parameterization allows the prior on `alpha_raw` to be `normal(0, 1)`, which is on a similar scale as other parameters in our model. 
-    - Having all parameters on a similar scale makes the sampling more efficient.
-2. The `exp()` transformation of this parameter makes the effective prior on `alpha` noninformative. 
-This seems like a lot of gymnastics to be doing. However, it has benefits.
+    - It would have been *mathematically* equivalent to define a (non-transformed) parameter `alpha` with a prior `normal(0, 10)`. 
+    - However, this parameterization yields a parameter (`alpha_raw`) which is on a similar scale as other parameters in our model. The `exp()` transformation makes the difference between these two scales even more dramatic.
+    - In general, having all parameters on a similar scale makes the sampling more efficient.
 
-Observe:
 
-```{r}
+2. The `exp()` transformation of this parameter additionally allows us to put a prior on `log alpha`. 
+    - we want to put a prior on `log alpha` since alpha enters into our likelihood in the exponent.
+
+This seems like a lot of gymnastics to be doing. 
+
+However, it has practical implications for our modeling efficiency.
+
+Observe that, for a single value of `alpha_raw` (e.g. 0.2), the transformation yields:
+
+```{r single-value-alpha}
 alpha_raw <- 0.2
 tau_al <- 10
 log_alpha <- alpha_raw * tau_al
 alpha <- exp(log_alpha)
+print(alpha)
 ```
 
-However, when you consider the resulting distribution of alpha, when `alpha_raw` is sampled from `normal(0, 1)`:
+which may seem silly.
 
-```{r}
+**However**
+
+Consider the resulting distribution of alpha over a range of values for `alpha_raw` sampled from our `normal(0, 1)` prior:
+
+```{r dist-alpha}
 alpha_raw <- rnorm(1000, 0, 1)
 tau_al <- 10
 log_alpha <- alpha_raw * tau_al
@@ -126,11 +184,13 @@ ggplot(data.frame(alpha = alpha, alpha_raw = alpha_raw),
     scale_x_log10(labels = scientific)
 ```
 
-Notice how `alpha` ranges from 1e-10 to 1e+10. Sampling this parameter space may require different step sizes & different tuning parameter values throughout this distribution.
+Notice how `alpha` ranges from 1e-10 to 1e+10 on a log scale. We have to truncate this dramatically to even consider plotting it on its original scale. 
+
+Sampling this parameter space may require different step sizes & different tuning parameter values throughout this distribution.
 
 The `alpha_raw` scale, by comparison, is a lot friendlier. 
 
-```{r}
+```{r dist-alpha-vs-raw}
 ggplot(data.frame(alpha = alpha, alpha_raw = alpha_raw), 
        aes(x = alpha, y = alpha_raw)) + 
     geom_density2d() + 
@@ -139,12 +199,14 @@ ggplot(data.frame(alpha = alpha, alpha_raw = alpha_raw),
 
 This distribution is centered at 0 and has more consistent behavior throughout its range of values.
 
-What's important to note here is that the non-centered parameterization is mathematically equivalent to the standard parameterization, but it is (in some ways) a *different model*. You may get different results from each.
+What's important to note here is that while the non-centered parameterization is mathematically equivalent to the standard parameterization, it is (in some ways) a *different model*. You may get different results from each.
+
+Packages like [rstanarm](http://github.com/stan-dev/rstanarm) which provide easy wrappers to a variety of standard models implemented in Stan use a non-centered parameterization by default.
 
 More information on non-centered parameterization:
 
-1. (discussion on stan-dev list)[https://groups.google.com/forum/#!topic/stan-dev/9ZvhKpXlwuI]
-2. (Gelman, 2004. Parameterization and Bayesian Modeling)[http://www.stat.columbia.edu/~gelman/research/published/parameterization.pdf]
+1. [discussion on stan-dev list](https://groups.google.com/forum/#!topic/stan-dev/9ZvhKpXlwuI)
+2. [Gelman, 2004. Parameterization and Bayesian Modeling](http://www.stat.columbia.edu/~gelman/research/published/parameterization.pdf)
 
 ## Testing the model on simulated data
 
@@ -154,7 +216,9 @@ We can simulate data using R or in Stan. We will start by simulating data in R.
 
 ### Simulate data in R 
 
-The following function takes our two parameters (`alpha` and `mu`) as inputs 
+Like our stan model code, this function adapts the [example.R](https://github.com/to-mi/stan-survival-shrinkage/blob/master/example.R) code from the [stan-survival-shrinkage github repo](https://github.com/to-mi/stan-survival-shrinkage).
+
+Here we write a function that takes our two parameters (`alpha` and `mu`) as inputs 
 and the desired number of observed & censored observations. It returns 
 a data frame of simulated event times.
 
@@ -180,13 +244,13 @@ A few comments about this function:
 the censoring process except to assume that censoring is noninformative. 
 2. We have also deliberately written this function to mirror the structure of our bladder-cancer data.
 
-As you will see, this will make it easier to reuse this function later.
+This will make it easier to reuse this function later.
 
 #### Simulate data for arbitrary input values
 
 We can use this to simulate a dataset for hypothetical parameter values of `alpha` & `mu`.
 
-```{r}
+```{r simulated-data}
 test_alpha <- 0.8
 test_mu <- -3
 
@@ -201,24 +265,34 @@ simulated_data <-
                  Nobs = test_nobs,
                  Ncen = test_ncen
                  ) 
+head(simulated_data)
+```
 
+Which yields the following survival curve:
+
+```{r sim-km-curve}
 ## plot KM curve from simulated data
 simulated_data <- 
     simulated_data %>%
     dplyr::mutate(os_deceased = os_status == 'DECEASED')
 
 autoplot(survival::survfit(Surv(os_months, os_deceased) ~ 1,
-                      data = test_simulated_data
+                      data = simulated_data
                       ), conf.int = F) + 
     ggtitle('Simulated KM curve')
 ```
 
+This should match our Weibull-derived Survival function fairly closely.
+
+  [[ TODO write r code]]
+
 ### fit to simulated data in stan
 
-Now that we have simulated data, we are ready to try to fit the model 
-in Stan to recover our parameter estimates.
+Now that we have simulated data, we are ready to fit the model in Stan. 
 
-#### the list of data
+If we have written both our stan code & simulated data process correctly, our posterior intervals for `alpha` and `mu` should contain the values used to simulate our dataset (`r test_alpha` and `r test_mu`).
+
+#### preparing data for stan
 
 Stan takes data input as a list. The contents of the list should match 
 those of the `data` block in the stan code.
@@ -232,14 +306,14 @@ print_stan_file(stan_file, section = 'data')
 our input list to Stan should contain dimensions & values 
 for observed & censored data, separately.
 
-```{r gen-stan-input}
-observed_data <- test_simulated_data %>%
+```{r stan-data}
+observed_data <- simulated_data %>%
     dplyr::filter(os_status == 'DECEASED')
 
-censored_data <- test_simulated_data %>%
+censored_data <- simulated_data %>%
     dplyr::filter(os_status != 'DECEASED')
 
-test_data <- list(
+stan_data <- list(
     Nobs = nrow(observed_data),
     Ncen = nrow(censored_data),
     yobs = observed_data$os_months,
@@ -247,14 +321,13 @@ test_data <- list(
 )
 rm(censored_data)
 rm(observed_data)
-str(test_data)
+str(stan_data)
 ```
 
-(wrap this prep-data process in a function so it 
-can be reused with our actual data)
+(wrap this prep-data process in a function `gen_stan_data` for later)
 
-```{r gen-stan-input-f}
-gen_stan_input <- function(data) {
+```{r gen-stan-data-function}
+gen_stan_data <- function(data) {
     observed_data <- data %>%
         dplyr::filter(os_status == 'DECEASED')
     
@@ -272,12 +345,15 @@ gen_stan_input <- function(data) {
 
 #### test simulated values with stan
 
-```{r}
+Let's call `stan`:
+
+```{r first-stan-run, warning = TRUE}
 recover_simulated <- 
     rstan::stan(stan_file,
-                data = test_data,
+                data = stan_data,
                 chains = 4,
-                iter = 1000
+                iter = 1000,
+                seed = 1328025050
                 )
 print(recover_simulated)
 ```
@@ -289,13 +365,13 @@ What's wrong with this picture?
 
 #### Setting initial values
 
-This step is usually optional, but may be necessary for some models. In this case, it's useful to set initial values, since Stan's defaults are not ideal for all of our parameters.
+This step is usually optional, but may be necessary for some models. 
 
-By default, Stan chooses a random initial value for each parameter on the unconstrained scale between -2 and 2. The default selection is on the unconstrained support so that the initial values are guaranteed to be consistent with the constrained range.
+In this case, it may be useful to set initial values. Recall the projected range of our transformed parameter `alpha`?
 
-When we pass the initial values in, however, these are on the constrained scale. 
+By default, Stan chooses a random initial value for each parameter on the unconstrained scale between -2 and 2. This random initialization is on the *unconstrained support* for each parameter. This guarantees that initial values are consistent with the constrained range.
 
-The main goal is to select the initial values at random but within a range that is reasonable for the model. 
+When we pass the initial values in, however, these are on the *constrained scale*. See the [Stan  manual](http://mc-stan.org/documentation/) for more details about transformations applied to constrained variables.
 
 ##### gen_inits function 
 
@@ -307,6 +383,8 @@ print_stan_file(stan_file, section = 'parameters')
 
 We have two parameters for which initial values should be set. 
 
+Let's try modifying the initial range for `alpha_raw` to utilize a smaller range than the default.
+
 ```{r stan-init-values}
 gen_inits <- function() {
       list(
@@ -316,16 +394,16 @@ gen_inits <- function() {
 }
 ```
 
-We will transform one of them (`alpha`) to utilize a smaller scale than the default (recall our earlier investigation into the range of possible values for  `alpha`).
+We wrap this in a function so that each chain will have a different set of initial values.
 
 #### stan code with initial values
 
 Let's try fitting our stan model again with our initial values function.
 
-```{r}
+```{r stanfit-with-inits}
 recover_simulated2 <- 
     rstan::stan(stan_file,
-                data = test_data,
+                data = stan_data,
                 chains = 4,
                 iter = 1000,
                 init = gen_inits
@@ -333,17 +411,56 @@ recover_simulated2 <-
 print(recover_simulated2)
 ```
 
-Now we see fewer numerical problems, and better convergence.
+Now we see fewer numerical problems, and better R-hat values.
 
-Have we recovered our parameter values?
+#### checking convergence 
+
+Normally I would dig further into this model to check convergence, since R-hat alone isn't sufficient to determine convergence. 
+
+But in this case I'm distracted by the summary of posterior estimates for our parameter values. 
+
+*Have we recovered our parameter values?*
+
+The values we used to simulate our data do not fall into the 95% credible intervals from our model.
+
+I will do some quick checks on convergence to see if this might be explained by lack of convergence.
+
+##### Reviewing traceplots
+
+Reviewing traceplot of `lp__` (log-posterior), which can reflect overall model fit:
+
+```{r traceplot-lp}
+rstan::traceplot(recover_simulated2, 'lp__')
+```
+
+And, reviewing traceplot of key parameters of interest:
+
+```{r}
+rstan::traceplot(recover_simulated2, c('alpha','mu'), ncol = 1)
+```
+
+Both of these look fuzzy-caterpillar-like.
+
+##### Launch shiny-stan
+
+You might then also launch [shinystan](http://github.com/stan-dev/shinystan) to see if this can help diagnose any convergence problems.
+
+```{r launch-shinystan}
+if (interactive())
+    shinystan::launch_shinystan(recover_simulated2)
+```
+
+But, in general, it doesn't seem like lack of convergence can explain the difference between estimated parameter values & those used to simulate our data.
+
+#### thinking about censoring
 
 What if we were to limit our input data to observed events?
 
-```{r}
+```{r stanfit-only-observed}
 recover_simulated_obs <- 
     rstan::stan(stan_file,
-                data = gen_stan_input(
-                    test_simulated_data %>% dplyr::filter(os_status == 'DECEASED')
+                data = gen_stan_data(
+                    simulated_data %>% dplyr::filter(os_status == 'DECEASED')
                     ),
                 chains = 4,
                 iter = 1000,
@@ -357,8 +474,8 @@ And, to our censored observations?
 ```{r}
 recover_simulated_cen <- 
     rstan::stan(stan_file,
-                data = gen_stan_input(
-                    test_simulated_data %>% dplyr::filter(os_status != 'DECEASED')
+                data = gen_stan_data(
+                    simulated_data %>% dplyr::filter(os_status != 'DECEASED')
                     ),
                 chains = 4,
                 iter = 1000,
@@ -367,8 +484,9 @@ recover_simulated_cen <-
 print(recover_simulated_cen)
 ```
 
-We see that we have (not surprisingly!) very poor inferences from our censored observations -- 
- `runif()` is a pretty aggressive censoring strategy!
+We see that we have (not surprisingly!) very poor inferences from our censored observations -- .. and that we are able to recover our parameter estimates when limiting only to observed data points.
+
+This is our first hint that the inability to recover parameter estimates has something to do with how the data are censored. Is this just introducing error into our inferences?
 
 ### Posterior predictive checks
 
@@ -431,7 +549,7 @@ Next we might ask about the posterior estimates of the survival curve. How would
 One way (there may be several) is to:
 1. compute the cumulative survival at each observed timepoint for each draw from the posterior
 2. aggregate the cumulative survival estimates to discrete units of time
-3. summarizes the cumulative survival for each interval, over the posterior draws.
+3. summarize the cumulative survival for each interval, over the posterior draws.
 
 This is the method we will use here.
 
@@ -480,14 +598,22 @@ ggplot(pp_survdata_agg %>%
     xlim(c(0, 200))
 ```
 
+Here we see a dramatic difference in survival curve, comparing our original simulated data with our posterior predictive distribution.
+
+#### Saving as a function 
+
 As before, we will want to wrap this in a function so that it can be reused in future steps, e.g. when we work with our TCGA data.
 
 ```{r pp_predict-function}
-pp_predict_surv <- function(pp_alpha, pp_mu, Nobs, Ncen, level = 0.9) {
+pp_predict_surv <- function(pp_alpha, pp_mu, Nobs, Ncen,
+                            level = 0.9,
+                            plot = F, data = NULL,
+                            sim_data_fun = sim_data
+                            ) {
     pp_newdata <- 
         purrr::map2(.x = pp_alpha,
                     .y = pp_mu,
-                    .f = ~ sim_data(alpha = .x, mu = .y,
+                    .f = ~ sim_data_fun(alpha = .x, mu = .y,
                                     Nobs = Nobs, Ncen = Ncen
                                     )
                     )
@@ -499,22 +625,165 @@ pp_predict_surv <- function(pp_alpha, pp_mu, Nobs, Ncen, level = 0.9) {
         purrr::map(fortify)
     
     ## compute quantiles given level 
-    lower <- 0 + ((1 - level)/2)
-    upper <- 1 - ((1 - level)/2)
+    lower_p <- 0 + ((1 - level)/2)
+    upper_p <- 1 - ((1 - level)/2)
     
     pp_survdata_agg <- 
         pp_survdata %>%
-        purrr::map(~ dplyr::mutate(., time_group = floor(time))) %>%
+        purrr::map(~ dplyr::mutate(.,
+                                   time_group = floor(time))) %>%
         dplyr::bind_rows() %>%
         dplyr::group_by(time_group) %>%
         dplyr::summarize(surv_mean = mean(surv)
                          , surv_p50 = median(surv)
-                         , surv_lower = quantile(surv, probs = lower)
-                         , surv_upper = quantile(surv, probs = upper)
+                         , surv_lower = quantile(surv,
+                                                 probs = lower_p)
+                         , surv_upper = quantile(surv,
+                                                 probs = upper_p)
                          ) %>%
         dplyr::ungroup()
     
-    return(pp_survdata_agg)
+    if (plot == FALSE) {
+        return(pp_survdata_agg)
+    } 
+    
+    ggplot_data <- pp_survdata_agg %>%
+           dplyr::mutate(type = 'posterior predicted values') %>%
+           dplyr::rename(surv = surv_p50,
+                         lower = surv_lower,
+                         upper = surv_upper, time = time_group)
+    
+    if (!is.null(data))
+        ggplot_data <- 
+            ggplot_data %>% 
+            bind_rows(
+                fortify(
+                    survival::survfit(
+                        Surv(os_months, os_deceased) ~ 1, 
+                        data = data %>% 
+                            dplyr::mutate(
+                                os_deceased = os_status == 'DECEASED')
+                        )) %>%
+                dplyr::mutate(lower = surv,
+                              upper = surv, type = 'actual data')
+                )
+    
+    pl <- ggplot(ggplot_data,
+                 aes(x = time, group = type, linetype = type)) + 
+        geom_line(aes(y = surv, colour = type)) +
+        geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2)
+        
+    pl 
 }
 ```
+
+#### PP check on observed-event only model
+
+How well is our actual data to our posterior predicted values when we limit our model to observed events only?
+
+```{r ppcheck-obs-only}
+pp_alpha_obs <- extract(recover_simulated_obs, 'alpha')$alpha
+pp_mu_obs <- extract(recover_simulated_obs, 'mu')$mu
+pl <- pp_predict_surv(pp_alpha = pp_alpha_obs,
+                pp_mu = pp_mu_obs,
+                Nobs = test_nobs,
+                Ncen = 0,
+                plot = T,
+                data = simulated_data %>% 
+                    dplyr::filter(os_status == 'DECEASED')
+                )
+pl + 
+    ggtitle('PP check against simulated data\n(model fit using observed events only)') +
+    xlim(NA, 200)
+```
+
+This is an example of how posterior predictive checking can be useful.
+
+At this point we know there must be a problem with either our data simulating process, our model, or both.
+
+My suspicion is that it has something to do with the censoring (`runif()`) process in the data simulation.
+
+## checking data simulation
+
+Let's try an alternate data simulating process, where the censoring is independent of the survival time.
+
+```{r alt-sim-data-function}
+alt_sim_data <- function(alpha, mu, Nobs, Ncen) {
+    
+    data <- data.frame(surv_months = rweibull(n = Nobs + Ncen, alpha, exp(-(mu)/alpha)),
+                       censor_months = rexp(n = Nobs + Ncen, rate = 1/100),
+                       stringsAsFactors = F
+                       ) %>%
+        dplyr::mutate(os_status = ifelse(surv_months < censor_months,
+                                          'DECEASED', 'LIVING'
+                                          ),
+                       os_months = ifelse(surv_months < censor_months,
+                                          surv_months, censor_months
+                                          )
+                       )
+
+    return(data)
+}
+```
+
+Next, we simulate new data according to this function & try to recover parameter estimates using Stan.
+
+```{r alt-sim-data}
+
+alt_simulated_data <- alt_sim_data(
+    alpha = test_alpha,
+    mu = test_mu,
+    Ncen = test_ncen,
+    Nobs = test_nobs
+    )
+autoplot(survival::survfit(Surv(os_months, I(os_status == 'DECEASED')) ~ 1,
+                           data = alt_simulated_data
+                           ))
+```
+
+How many censored observations are there?
+
+```{r}
+table(alt_simulated_data$os_status)
+```
+
+Can we recover parameter estimates with our model?
+
+```{r recover-alt-sim}
+recover_alt_simulated <- rstan::stan(
+    file = stan_file,
+    data = gen_stan_data(alt_simulated_data),
+    chains = 4,
+    iter = 1000,
+    init = gen_inits
+)
+print(recover_alt_simulated)
+```
+
+Run posterior predictive checks on this analysis
+
+```{r}
+pp_alpha <- rstan::extract(recover_alt_simulated, 'alpha')$alpha
+pp_mu <- rstan::extract(recover_alt_simulated, 'mu')$mu
+pl <- pp_predict_surv(pp_alpha = pp_alpha,
+                pp_mu = pp_mu,
+                sim_data_fun = alt_sim_data,
+                Nobs = test_nobs, Ncen = test_ncen,
+                plot = T, data = alt_simulated_data
+                )
+pl + ggtitle('KM curve for actual & posterior predicted data\nAfter modifying the simulate-data function')
+```
+
+## final thoughts
+
+In sum, we attempted to check our model code against simulated data, but accidentally simulated our data with an informative censoring process. 
+
+It was obvious at first that our model was unable to recover the parameter values used to simulate the data, which was troubling at first. But, what is perhaps more useful to observe, the standard workflow of doing posterior predictive checking on our data also indicated that something was awry.
+
+Had these data *not* been simulated, and had they instead come from (say) a clinical study, we would not have known *a priori* that the censoring process was informative. We would also not have known that the posterior estimates of `mu` and `alpha` were incorrect. 
+What is encouraging, however, is that the **posterior predictive check did indicate we had a problem**. It was pretty obvious that posterior predictive distribution did not correspond to our actual data. 
+
+Here, since we are working with simulated data, we are able to address the concern by modifying our simulate-data process. In the context of an actual analysis, modifying your data is not a possibility (!) and so the model would instead have to be adjusted to account for the censoring process.
+
+
 
