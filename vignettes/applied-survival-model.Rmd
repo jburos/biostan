@@ -82,7 +82,7 @@ str(clinical_data)
 
 However, MSKCC has provided the [CGDS-R](http://cran.r-project.org/web/packages/cgdsr/index.html) package, which provides an easier interface to the same data.
 
-Load the clinical data for this cohort:
+Run the following lines of code to load the clinical data for this cohort:
 
 ```{r actual-load-data}
 mycgds = cgdsr::CGDS("http://www.cbioportal.org/public-portal/")
@@ -183,7 +183,7 @@ ggplot(clin_data,
 
 The KM curve for these observations additionally looks like this: 
 
-( constructed using `survfit`)
+( constructed using `survfit` )
 
 ```{r km-survival-curve}
 mle.surv <- 
@@ -772,7 +772,7 @@ ggplot(pp_survdata_agg %>%
     xlim(c(0, 200))
 ```
 
-Here we see a dramatic difference in survival curve, comparing our original simulated data with our posterior predictive distribution.
+Here we see that the survival curve from our original (simulated) data matches the posterior predictive density pretty closely. This is a good thing since we are working with simulated data!
 
 #### Saving as a function 
 
