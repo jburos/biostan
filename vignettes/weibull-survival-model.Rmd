@@ -86,7 +86,7 @@ This will ensure that (a) we understand the model well, and (b) the model can re
 
 If you're at an R console, you can open the Stan file in an editor as follows:
 
-```{r edit-stan-file}
+```{r edit-stan-file, eval = F}
 if (interactive())
     file.edit(stan_file)
 ```
@@ -441,7 +441,7 @@ Both of these look fuzzy-caterpillar-like.
 
 You might then also launch [shinystan](http://github.com/stan-dev/shinystan) to see if this can help diagnose any convergence problems.
 
-```{r launch-shinystan}
+```{r launch-shinystan, eval = F}
 if (interactive())
     shinystan::launch_shinystan(recover_simulated2)
 ```

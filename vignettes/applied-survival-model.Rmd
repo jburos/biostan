@@ -254,7 +254,7 @@ This will ensure that (a) we understand the model well, and (b) the model can re
 
 If you're at an R console, you can open the Stan file in an editor as follows:
 
-```{r edit-stan-file}
+```{r edit-stan-file, eval = F}
 if (interactive())
     file.edit(stan_file)
 ```
@@ -857,7 +857,7 @@ rstan::traceplot(wei_fit, c('alpha','mu'), ncol = 1)
 For more detailed model inspection we can leverage the awesome `shinystan`. 
 This displays best-practice diagnostics (e.g. autocorrelation of chains) in an easy-to-use interface.
 
-```{r launch-shinystan}
+```{r launch-shinystan, eval = F}
 if (interactive())
     launch_shinystan(wei_fit)
 ```
