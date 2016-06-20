@@ -52,8 +52,8 @@ $$f(x|\alpha,\sigma) =
 
 In the context of this analysis, we will define two parameters:
 
-* `alpha` (called the shape parameter)
-* `mu` where $\sigma = e^\frac{-\mu}{\alpha}$.
+* `alpha` (shape) defined as above
+* `mu` (scale) where $\sigma = e^\frac{-\mu}{\alpha}$.
 
 If we had covariates and wanted to estimate a proportional hazards model, we would replace `mu` with a linear combination of covariates. However, in this case we are interested in recovering features of our NULL model and so we treat `mu` as a constant intercept.
 
