@@ -33,11 +33,11 @@ print_stan_code <- function(stan_code, section = NULL) {
 
 #' reads a stan file into R
 #'
-#' @params path to stan file
+#' @param path to stan file
 #'
 #' @import readr
 #'
-#' @returns character scalar containing stan code
+#' @return character scalar containing stan code
 #' @export
 read_stan_file <- function(stan_file) {
     readr::read_file(stan_file)
@@ -51,7 +51,7 @@ read_stan_file <- function(stan_file) {
 #'
 #' @import readr
 #'
-#' @returns character scalar containing stan code
+#' @return character scalar containing stan code
 #' @export
 print_stan_file <- function(stan_file, ...) {
     print_stan_code(read_stan_file(stan_file), ...)
