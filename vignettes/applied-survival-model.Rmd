@@ -667,11 +667,19 @@ To compute the probability of seeing a value of `r cat('alpha >= ',test_alpha)`:
 mean(pp_alpha >= test_alpha)
 ```
 
-And for `mu` (testing `r cat('mu >= ', test_mu))`:
+And for `mu` (testing `r cat('mu >= ', test_mu)`:
 
 ```{r}
 mean(pp_mu >= test_mu)
 ```
+
+The joint probability of seeing this combination of parameter values, however, isn't as encouraging:
+
+```{r}
+mean(pp_mu >= test_mu & pp_alpha >= test_alpha)
+```
+
+We would need more iterations in order to estimate this with greater precision.
 
 ### Posterior predictive checks
 
@@ -679,8 +687,7 @@ Next we might ask whether this error in recovering the parameters used to simula
 
 To do this, we will simulate data from our posterior draws of parameters. These are called the **posterior predicted values**. Their distribution is the **posterior predictive distribution**.
 
-It may seem crazy to do this for simulated data, but it's not really extra work since we will likely want to re-use this process on our observed dataset. We will take care throughout to write each step as a function to be re-used later.
-
+*(It may seem crazy to do this for simulated data, but it's not really extra work since we will likely want to re-use this process on our observed dataset. We will take care throughout to write each step as a function to be re-used later.)*
 
 #### simulating data for each posterior draw
 
