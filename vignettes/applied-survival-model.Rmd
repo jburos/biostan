@@ -42,27 +42,21 @@ Here we will work through an example of fitting a survival model in Stan, using 
 
 Fitting survival models in Stan is fairly straightforward. However, specifying a model in Stan requires a bit more thought than when using standard MLE tools such as `survfit`. 
 
-In these examples, we will be using models which have **previously been checked against simulated data**, and whose properties are fairly well understood. Those data checks are provided as separate vignettes. See those for details.
-
-This vignette, by comparison, focuses on the practical work of fitting the models to a clinical dataset.
+This vignette is part 1 of a multi-part series. 
 
 # Outline
 
-Our analysis will iterate through various models and approaches to analysis. 
+Over the course of several vignettes, we will review various models and approaches to analysis. 
 
-We will start by inspecting our data and doing some cursory exploration.
+In this vignette, we cover the following:
 
-Then, we iterate:
+1. Data review & inspection
+2. Review parametric Weibull survival model 
+3. Test parametric survival model against simulated data
+4. Fit NULL parametric survival model with TCGA data
+5. Check convergence & review posterior predictive checks on model
 
-0. Select a model for consideration
-    - inspect model
-    - test model on simulated data
-    - fit model to clinical data
-    - Check model convergence
-    - Check posterior predictive distributions vs actual data
-    - Summarize ELPD using `loo`
-    - Compare model to previous models
-7. Propose an update to the model / next thing to try
+Part II of this series will consider a non-parametric piecewise exponential model.
 
 # Data
 
@@ -104,7 +98,9 @@ str(clinical_data,  no.list = T, vec.len = 2)
 
 ## Data cleaning 
 
-Let's do some minimal data manipulation on this DataFrame to make it easier to work with. We will save the converted data in a data.frame called `clin_data`.
+Let's do some minimal data manipulation on this DataFrame to make it easier to work with. I personally happen to like lower-case variable names and to work with NA values instead of empty strings.
+
+We will save the converted data in a data.frame called `clin_data`.
 
 ```{r initprep-data}
 ## names to lower case
@@ -128,15 +124,17 @@ str(clin_data, vec.len = 2, list.len = 10)
 
 ## Data exploration
 
-In survival analysis, the outcome or dependent variable is **time to event**.  
+In survival analysis, the outcome or dependent variable is the *time to event* where some event times are not observed (IE they are censored). 
 
-Our first analysis will treat **overall survival** as the event of interest. In this cohort, the overall survival is described by two variables: `os_status` & `os_months`. 
+Here we consider the more common scenario of *right-censoring*. This is the case where the terminating event is not observed. Observations are instead censored at time `t` .
+
+Our first analysis will treat **overall survival** as the event of interest, as opposed to progression-free survival. In this cohort, the overall survival is described by two variables: `os_status` & `os_months`. 
 
 We will start by inspecting these data.
 
 ### Negative/missing event times
 
-We have one observation with missing data for Overall Survival
+We have one observation with missing data for `os_status`:
 
 ```{r inspect-os-status}
 clinical_data %>%
@@ -145,7 +143,7 @@ clinical_data %>%
     str()
 ```
 
-In addition, we have a 3 observations with unknown and/or negative survival times (`os_months < 0`).
+We have a 3 observations with unknown and/or negative survival times (`os_months < 0`):
 
 ```{r inspect-os-months}
 clinical_data %>%
@@ -169,17 +167,9 @@ assert_that(nrow(clin_data) == nrow(clinical_data) - 4)
 
 ### Distribution of event times
 
-We will do some minimal data exploration before attempting to fit the model.
+Among the remaining observations, the median time to event is `r median(clin_data$os_months)` months.
 
-Numerical summary of event times by event type
-
-```{r summary-os-months}
-clin_data %>%
-    split(.$os_status) %>%
-    purrr::map(~ summary(.$os_months))
-```
-
-Graphical summary of event times by type
+Event times are distributed as follows among observed (DECEASED) & censored (LIVING) observations:
 
 ```{r plot-os-months}
 ggplot(clin_data,
@@ -191,7 +181,9 @@ ggplot(clin_data,
     geom_density(alpha = 0.5)
 ```
 
-Use the `survfit` function to plot the KM survival curve 
+The KM curve for these observations additionally looks like this: 
+
+( constructed using `survfit`)
 
 ```{r km-survival-curve}
 mle.surv <- 
@@ -583,44 +575,40 @@ Now we see fewer numerical problems, and better R-hat values.
 
 #### checking convergence 
 
-Normally I would dig further into this model to check convergence, since R-hat alone isn't sufficient to determine convergence. 
+Assessing convergence can be a tricky business, since every model & every scenario is different. 
 
-But in this case I'm also looking to see whether our posterior intervals contain the parameters used to simulate our dataset. 
+In general, I look at three things when assessing convergence : 
 
-We will do a quick review of the traceplots before continuing with our posterior predictive checking.
+1. Rhat values (are they close to 1)?
+2. Review traceplots for `lp__` & key parameters
+3. launch `shinystan` for further checking.
 
 ##### Reviewing traceplots
 
-Reviewing traceplot of `lp__` (log-posterior), which can reflect overall model fit:
+In this case, the traceplot of `lp__` (the log-posterior) looks like it's well mixed:
 
-```{r sim-traceplot-lp}
+```{r sim-traceplot-lp, fig.height=3}
 rstan::traceplot(recover_simulated2, 'lp__')
 ```
 
-And, reviewing traceplot of key parameters of interest:
+Similarly, those for our parameters of interest look good:
 
 ```{r sim-traceplot-params}
 rstan::traceplot(recover_simulated2, c('alpha','mu'), ncol = 1)
 ```
 
-Both of these look fuzzy-caterpillar-like.
-
 ##### Launch shiny-stan
 
-You might then also launch [shinystan](http://github.com/stan-dev/shinystan) to see if this can help diagnose any convergence problems.
+We could also launch [shinystan](http://github.com/stan-dev/shinystan) to check for divergent transitions or excessive autocorrelation in the chains. This is particularly helpful when diagnosing convergence issues. 
 
 ```{r sim-launch-shinystan, eval = F}
 if (interactive())
     shinystan::launch_shinystan(recover_simulated2)
 ```
 
-### Posterior predictive checks
+### Reviewing posterior distributions of parameters
 
-Next we might ask whether this error in recovering the parameters used to simulate data are substantive. Perhaps we can be a little off in estimating the baseline hazard parameters, so long as our inferences about biomarkers are sustained?
-
-To do this, we will simulate data from our posterior draws of parameters. These are called the **posterior predicted values**. Their distribution is the **posterior predictive distribution**.
-
-It may seem crazy to do this for simulated data, but it's not really extra work since we will likely want to re-use this process on our observed dataset. We will take care throughout to write each step as a function to be re-used later.
+Next, we can check to see whether the model was able to recover our parameters.
 
 #### extracting parameters from the Stanfit object
 
@@ -656,6 +644,44 @@ ggplot(data.frame(alpha = pp_alpha, mu = pp_mu)) +
     ggtitle('Posterior distribution of mu\nshowing true value in red')
 ```
 
+The posterior estimates of the parameters *do* contain those used to simulate our data, but they are not necessarily at the mode of each distribution. 
+
+Also, we have a high degree of correlation between `mu` and `alpha`:
+
+```{r plot-mu-vs-alpha}
+ggplot(data.frame(alpha = pp_alpha, mu = pp_mu)) + 
+    geom_density2d(aes(x = alpha, y = mu)) +
+    geom_point(aes(x = test_alpha, y = test_mu), colour = 'red', size = 2) +
+    ggtitle('Posterior distributions of mu and alpha\nshowing true parameter values in red')
+```
+
+It does seem like these values are on the edge of the posterior density for the parameter values.
+
+*How likely are the parameter values used to simulate our data, according to this model?*
+
+One nice thing about sampling from the full posterior is that we can compute posterior probabilities directly, by summarizing over the values.
+
+To compute the probability of seeing a value of `r cat('alpha >= ',test_alpha)`:
+
+```{r}
+mean(pp_alpha >= test_alpha)
+```
+
+And for `mu` (testing `r cat('mu >= ', test_mu))`:
+
+```{r}
+mean(pp_mu >= test_mu)
+```
+
+### Posterior predictive checks
+
+Next we might ask whether this error in recovering the parameters used to simulate data are substantive. Perhaps we can be a little off in estimating the baseline hazard parameters, so long as our inferences about biomarkers are sustained?
+
+To do this, we will simulate data from our posterior draws of parameters. These are called the **posterior predicted values**. Their distribution is the **posterior predictive distribution**.
+
+It may seem crazy to do this for simulated data, but it's not really extra work since we will likely want to re-use this process on our observed dataset. We will take care throughout to write each step as a function to be re-used later.
+
+
 #### simulating data for each posterior draw
 
 We can use hadley's `purrr::map2` to simulate data for each pair of `mu`*`alpha` values.
@@ -671,6 +697,8 @@ pp_newdata <-
                 )
 ```
 
+If you're not familiar with `purrr`, I recommend you inspect the resulting object.
+
 We now have a list of D datasets, each containing a simulation according to that draw's parameter values for `mu` & `alpha`.
 
 Let's plot the time to event in the posterior draws, and compare this to the test dataset we used to fit our model.
@@ -685,13 +713,14 @@ ggplot(pp_newdata %>%
     facet_wrap(~type, ncol = 1)
 ```
 
-Pretty similar.
+These look pretty similar.
 
 #### summarizing posterior predictive draws
 
 Next we might ask about the posterior estimates of the survival curve. How would we estimate this?
 
 One way (there may be several) is to:
+
 1. compute the cumulative survival at each observed timepoint for each draw from the posterior
 2. aggregate the cumulative survival estimates to discrete units of time
 3. summarize the cumulative survival for each interval, over the posterior draws.
