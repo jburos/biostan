@@ -661,13 +661,13 @@ It does seem like these values are on the edge of the posterior density for the 
 
 One nice thing about sampling from the full posterior is that we can compute posterior probabilities directly, by summarizing over the values.
 
-To compute the probability of seeing a value of `r cat('alpha >= ',test_alpha)`:
+To compute the probability of seeing a value of `r str_c('alpha >= ',test_alpha)`:
 
 ```{r}
 mean(pp_alpha >= test_alpha)
 ```
 
-And for `mu` (testing `r cat('mu >= ', test_mu)`:
+And for `mu` (testing `r str_c('mu >= ', test_mu)`:
 
 ```{r}
 mean(pp_mu >= test_mu)
