@@ -282,10 +282,6 @@ autoplot(survival::survfit(Surv(os_months, os_deceased) ~ 1,
     ggtitle('Simulated KM curve')
 ```
 
-This should match our Weibull-derived Survival function fairly closely.
-
-  [[ TODO write r code]]
-
 ### fit to simulated data in stan
 
 Now that we have simulated data, we are ready to fit the model in Stan. 
