@@ -17,11 +17,7 @@ License: GPL-3
 LazyData: TRUE
 Suggests:
     knitr,
-    rmarkdown
-VignetteBuilder: knitr
-RoxygenNote: 5.0.1
-SystemRequirements: C++11, clang++
-Imports:
+    rmarkdown,
     assertthat,
     cgdsr,
     dplyr,
@@ -35,3 +31,11 @@ Imports:
     shinystan,
     survival,
     tidyr
+VignetteBuilder: knitr
+RoxygenNote: 5.0.1
+SystemRequirements: C++11, clang++
+Imports:
+    rstanarm,
+    rstan,
+    shinystan,
+    loo
