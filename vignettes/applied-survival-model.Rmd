@@ -1070,7 +1070,7 @@ This function will take a `formula` object as input & construct the `stan_data` 
 For example: 
 
 ```{r fullmodel-test-gen-data}
-stan_input_data <- gen_stan_data(clin_data, '~ gender')
+stan_input_data <- gen_stan_data(clin_data, '~ I(gender=="MALE")')
 
 str(stan_input_data)
 ```
@@ -1081,14 +1081,14 @@ Let's try to run this on our updated stan code
 
 ```{r fullmodel-test-stan}
 testfit <- rstan::stan(stan_file,
-                       data = gen_stan_data(clin_data, '~ gender'),
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
                        init = gen_inits,
                        iter = 4,
                        chains = 1
                        )
 
 fullfit <- rstan::stan(stan_file,
-                       data = gen_stan_data(clin_data, '~ gender'),
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
                        init = gen_inits,
                        iter = 5000,
                        chains = 4
@@ -1225,3 +1225,39 @@ Our goal is to
 First let's take a look at the distribution of our `beta` estimates. What is the range of impact this parameter will likely have on outcome?
 
 ```{r fullmodel-summarize-gender}
+pp_beta_bg <- rstan::extract(fullfit2, 'beta_bg')$beta_bg
+ggplot(data = data.frame(beta_bg = unlist(pp_beta_bg)),
+        aes(x = beta_bg)) + 
+    geom_density()
+```
+
+This is not surprising, since remember our coefficient estimates are regularized using a laplace prior. 
+
+How likely is this coefficient to be > 0 ?
+
+```{r fullmodel-sum-beta}
+mean(pp_beta_bg >= 0)
+```
+
+How well does this model fit our data ? 
+
+```{r}
+## among women
+pp_predict_surv(pp_alpha = rstan::extract(fullfit2, 'alpha')$alpha,
+                pp_mu = rstan::extract(fullfit2,'mu')$mu,
+                n = nrow(clin_data %>% dplyr::filter(gender != 'MALE')),
+                data = clin_data %>% dplyr::filter(gender != 'MALE'),
+                plot = TRUE
+                )
+
+## among men
+pp_predict_surv(pp_alpha = rstan::extract(fullfit2, 'alpha')$alpha,
+                pp_mu = rstan::extract(fullfit2,'mu')$mu + rstan::extract(fullfit2,'beta_bg')$beta_bg,
+                n = nrow(clin_data %>% dplyr::filter(gender == 'MALE')),
+                data = clin_data %>% dplyr::filter(gender == 'MALE'),
+                plot = TRUE
+                )
+
+```
+
+

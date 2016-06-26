@@ -46,7 +46,7 @@ transformed data {
   // duration at first timepoint = t_obs[1] ( implicit t0 = 0 )
   t_dur[1] = t_obs[1];
   for (i in 2:T) {
-      t_dur[i] <- t_obs[i] = t_obs[i-1];
+      t_dur[i] = t_obs[i] - t_obs[i-1];
   }
 }
 parameters {
@@ -66,4 +66,11 @@ model {
   }
   beta ~ cauchy(0, 2);
   event ~ poisson(hazard);
+}
+generated quantities {
+  real log_lik[N];
+
+  for (i in 1:N) {
+      log_lik[i] = poisson_lcdf(event[i] | hazard[i]);
+  }
 }
