@@ -15,8 +15,8 @@ transformed data {
   real<lower=0> tau_mu;
   real<lower=0> tau_al;
 
-  tau_mu <- 10.0;
-  tau_al <- 10.0;
+  tau_mu = 10.0;
+  tau_al = 10.0;
 }
 
 parameters {
@@ -26,12 +26,12 @@ parameters {
 
 transformed parameters {
   real alpha;
-  alpha <- exp(tau_al * alpha_raw);
+  alpha = exp(tau_al * alpha_raw);
 }
 
 model {
   yobs ~ weibull(alpha, exp(-(mu)/alpha));
-  increment_log_prob(weibull_ccdf_log(ycen, alpha, exp(-(mu)/alpha)));
+  target += weibull_lccdf(ycen | alpha, exp(-(mu)/alpha));
 
   alpha_raw ~ normal(0.0, 1.0);
   mu ~ normal(0.0, tau_mu);
