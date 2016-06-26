@@ -665,22 +665,24 @@ One nice thing about sampling from the full posterior is that we can compute pos
 To compute the probability of seeing a value of `r stringr::str_c('alpha >= ',test_alpha)`:
 
 ```{r}
-mean(pp_alpha >= test_alpha)
+min(mean(pp_alpha >= test_alpha), mean(pp_alpha <= test_alpha))
 ```
 
 And for `mu` (testing `r stringr::str_c('mu >= ', test_mu)`:
 
 ```{r}
-mean(pp_mu >= test_mu)
+min(mean(pp_mu >= test_mu), mean(pp_mu <= test_mu))
 ```
 
-The joint probability of seeing this combination of parameter values, however, isn't as encouraging:
+The joint probability of seeing this combination of parameter values, however, may not be as encouraging.
+
+We could calculate this by, for example:
 
 ```{r}
 mean(pp_mu >= test_mu & pp_alpha >= test_alpha)
 ```
 
-We would need more iterations in order to estimate this with greater precision.
+Though, you would want to adjust the direction of `<` or `>` depending on the observed values.
 
 ### Posterior predictive checks
 
@@ -953,7 +955,309 @@ This isn't particularly encouraging, since it suggests that far fewer than the e
 
 But, we haven't included any covariate values. Does this improve with additional covariates?
 
+# Second analysis: Parametric survival with covariates
+
+We have included a modified version of our NULL model code that includes 
+a covariate matrix `X`. 
+
+This model also includes a prior on the coefficient estimates which has the result of regularizing the estimates. Following the [Peltola et al, 2014](http://ceur-ws.org/Vol-1218/bmaw2014_paper_8.pdf) example, a different prior is placed on known "background" coefficients than on potential biomarkers whose correlation to the outcome of interest is less well established.
+
+Before looking at biomarkers, however, we will first examine how well our model with the `bg` coefficients fits.
+
+Let's review the Stan file for this model:
+
+```{r fullmodel-stan-file}
+stan_file <- system.file('stan', 'weibull_survival_model.stan', package =  'biostan')
+
+biostan::print_stan_file(stan_file)
+```
+
+Or, if you are at a console, you might want to open the file to view its contents:
+
+```{r fullmodel-edit-file}
+## open stan file to review contents 
+if (interactive())
+    file.edit(stan_file)
+```
+
+### Review data block
+
+Our data block now looks like this : 
+
+```{r full-data-block}
+biostan::print_stan_file(stan_file, section = 'data')
+```
+
+with 3 new inputs expected:
+
+- **M_bg**: number of 'bg' covariates (background or known covariates)
+- **Xobs_bg**: matrix of covariates for records with observed events
+- **Xcen_bg**: matrix of covariates for records with censored events
 
 
+### Review parameters block
+
+Our parameters block now contains some new parameters, which are used to control the degree of regularization of the beta coefficients: 
+
+```{r full-parameters-block}
+biostan::print_stan_file(stan_file, section = 'parameters')
+```
+
+The regularization is done by calling a function (defined in the functions block) in `transformed parameters`:
+
+```{r full-functions-block}
+biostan::print_stan_file(stan_file, section = 'transformed parameters')
+```
+
+### Review model block
+
+Our model block also now contains the expansion of our linear predictor, `mu`, for censored and uncensored observations.
+
+```{r}
+biostan::print_stan_file(stan_file, section = 'model')
+```
+
+## Prepare input data for stan
+
+As before, we will need to prepare our input list to pass data to the compiled Stan model.
+
+We will update our `gen_stan_data` function to include these covariates:
+
+```{r fullmodel-gen-stan-data}
+gen_stan_data <- function(data, formula = as.formula(~ 1)) {
+    
+    if (!inherits(formula, 'formula'))
+        formula <- as.formula(formula)
+    
+    observed_data <- data %>%
+        dplyr::filter(os_status == 'DECEASED')
+    
+    censored_data <- data %>%
+        dplyr::filter(os_status != 'DECEASED')
+    
+    Xobs_bg <- observed_data %>%
+        model.matrix(formula, data = .)
+    
+    Xcen_bg <- censored_data %>% 
+        model.matrix(formula, data = . )
+    
+    assertthat::assert_that(ncol(Xcen_bg) == ncol(Xobs_bg))
+    M_bg <- ncol(Xcen_bg)
+    
+    if (M_bg > 1) {
+        if ("(Intercept)" %in% colnames(Xobs_bg))
+            Xobs_bg <- array(Xobs_bg[,-1], dim = c(nrow(observed_data), M_bg - 1))
+        if ("(Intercept)" %in% colnames(Xcen_bg))
+            Xcen_bg <- array(Xcen_bg[,-1], dim = c(nrow(censored_data), M_bg - 1))
+        assertthat::assert_that(ncol(Xcen_bg) == ncol(Xobs_bg))
+        M_bg <- ncol(Xcen_bg)
+    }
+    
+    stan_data <- list(
+        Nobs = nrow(observed_data),
+        Ncen = nrow(censored_data),
+        yobs = observed_data$os_months,
+        ycen = censored_data$os_months,
+        M_bg = M_bg,
+        Xcen_bg = array(Xcen_bg, dim = c(nrow(censored_data), M_bg)),
+        Xobs_bg = array(Xobs_bg, dim = c(nrow(observed_data), M_bg))
+    )
+}
+```
+
+This function will take a `formula` object as input & construct the `stan_data` input.
+
+For example: 
+
+```{r fullmodel-test-gen-data}
+stan_input_data <- gen_stan_data(clin_data, '~ I(gender=="MALE")')
+
+str(stan_input_data)
+```
+
+### Testing model on sample data 
+
+Let's try to run this on our updated stan code
+
+```{r fullmodel-test-stan}
+testfit <- rstan::stan(stan_file,
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
+                       init = gen_inits,
+                       iter = 4,
+                       chains = 1
+                       )
+
+fullfit <- rstan::stan(stan_file,
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
+                       init = gen_inits,
+                       iter = 5000,
+                       chains = 4
+                       )
+```
+
+### Update inits function
+
+We are seeing some poor sampling for certain parameters - let's try updating our inits function to reduce the range of initial values given.
+
+We have 5 parameters of interest:
+
+```{r fullmodel-param}
+biostan::print_stan_file(stan_file, section = 'parameters')
+```
+
+This function takes a parameter (`M_bg`) and returns a function to generate initial values for each chain.
+
+```{r gen-inits-2}
+gen_inits2 <- function(M_bg) {
+    function()
+      list(
+        alpha_raw = 0.01*rnorm(1),
+        mu = rnorm(1),
+        tau_s_bg_raw = 0.1*abs(rnorm(1)),
+        tau_bg_raw = array(abs(rnorm(M_bg)), dim = c(M_bg)),
+        beta_bg_raw = array(rnorm(M_bg), dim = c(M_bg))
+      )
+}
+```
+
+Let's test this out with our model. We will use a fairly innocuous covariate (`gender` as an example).
+
+```{r fullmodel-test-with-inits}
+testfit2 <- rstan::stan(stan_file,
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
+                       init = gen_inits2(M_bg = 1),
+                       iter = 4,
+                       chains = 1
+                       )
+
+fullfit2 <- rstan::stan(stan_file,
+                       data = gen_stan_data(clin_data, '~ I(gender=="MALE")'),
+                       init = gen_inits2(M_bg = 1),
+                       iter = 2000,
+                       chains = 4,
+                       control = list(adapt_delta = 0.995, max_treedepth = 10)
+                       )
+```
+
+#### aside on input data types
+
+While that model is running, let's take a look back at the `init` object we created. Both this & the `gen_stan_data` functions contain the use of `array(..., dim = c(.,.))` syntax. This is due to Stan's sensitivity to the structure of inputs given to it.
+
+For an example of how sensitive `stan()` is to dimension of inputs, try running the following exercize.
+
+Compare the value of *a vector wrapped by `array()`*
+
+```{r stan-alt-inits1a}
+array(rnorm(0), dim = c(0))
+```
+
+with that of *a naked vector*
+
+```{r stan-alt-inits2a}
+rnorm(0)
+```
+
+These two look the same, don't they?
+
+**However, looks can be deceiving. **
+
+The data type stan is looking for is a `vector`: 
+
+```{r review-stan-params}
+biostan::print_stan_file(stan_file, section = 'parameters')
+```
+
+Ironically, the only way to force an R object to be a vector is to wrap it in the `array()` operator.
+
+For example, compare the structure of *a vector wrapped in an array* 
+
+```{r stan-alt-inits1b}
+str(array(rnorm(0), dim = c(0)))
+```
+
+with the structure of *a naked vector*
+
+```{r stan-alt-inits2b}
+str(rnorm(0))
+```
+
+These are different objects in the eyes of `stan`. 
+
+### Reviewing model convergence
+
+Let's review the fit object from our model.
+
+```{r fullmodel-review-output}
+print(fullfit2)
+```
+
+Based on this, we can't immediately say that the model didn't converge - since our `Rhat` values are close to 1. 
+
+We can also say that the model has a coefficient estimate for `genderMale` that is slightly less than 0. 
+
+Let's look at the traceplots : 
+
+```{r fullmodel-traceplot-lp}
+rstan::traceplot(fullfit2, 'lp__')
+```
+
+```{r fullmodel-traceplot-alpha-mu}
+rstan::traceplot(fullfit2, c('alpha','mu'), ncol = 1)
+```
+
+```{r fullmodel-traceplot-beta}
+rstan::traceplot(fullfit2, 'beta_bg')
+```
+
+If we looked at shiny-stan for this model, we would see some divergent transitions (which isn't great). But these appear to have been sampled reasonably well. 
+
+## Reviewing parameter estimates
+
+Before spending too much time figuring out how to sample from this model's posterior distribution perfectly, let's take a look at our parameter estimates.
+
+Our goal is to 
+
+1. determine if the model is useful
+2. check the posterior predicted values against our data
+
+### Summarizing inference for coefficients
+
+First let's take a look at the distribution of our `beta` estimates. What is the range of impact this parameter will likely have on outcome?
+
+```{r fullmodel-summarize-gender}
+pp_beta_bg <- rstan::extract(fullfit2, 'beta_bg')$beta_bg
+ggplot(data = data.frame(beta_bg = unlist(pp_beta_bg)),
+        aes(x = beta_bg)) + 
+    geom_density()
+```
+
+This is not surprising, since remember our coefficient estimates are regularized using a laplace prior. 
+
+How likely is this coefficient to be > 0 ?
+
+```{r fullmodel-sum-beta}
+mean(pp_beta_bg >= 0)
+```
+
+How well does this model fit our data ? 
+
+```{r}
+## among women
+pp_predict_surv(pp_alpha = rstan::extract(fullfit2, 'alpha')$alpha,
+                pp_mu = rstan::extract(fullfit2,'mu')$mu,
+                n = nrow(clin_data %>% dplyr::filter(gender != 'MALE')),
+                data = clin_data %>% dplyr::filter(gender != 'MALE'),
+                plot = TRUE
+                )
+
+## among men
+pp_predict_surv(pp_alpha = rstan::extract(fullfit2, 'alpha')$alpha,
+                pp_mu = rstan::extract(fullfit2,'mu')$mu + rstan::extract(fullfit2,'beta_bg')$beta_bg,
+                n = nrow(clin_data %>% dplyr::filter(gender == 'MALE')),
+                data = clin_data %>% dplyr::filter(gender == 'MALE'),
+                plot = TRUE
+                )
+
+```
 
 

@@ -1,0 +1,181 @@
+---
+title: "Introduction to Baysian Inference with Stan"
+author: "Eric Novik"
+date: "26 June 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Bayesian Machinery
+$$ p(\theta | y) = \frac{p(y | \theta) * p(\theta) }{p(y)} = \frac{p(y | \theta) * p(\theta) }{\int p(y, \theta)d\theta} = \frac{p(y | \theta) * p(\theta) }{\int p(y |\theta) * p(\theta) d\theta} $$
+
+## Computing Log Probability
+```{r}
+data <- list(N = 5, y = c(0, 1, 1, 0, 1))
+
+# log probability function
+lp <- function(theta, d) {
+  lp <- 0
+  for (i in 1:d$N) {
+    lp <- lp + log(theta) * d$y[i] + 
+      log(1 - theta) * (1 - d$y[i])
+  }
+  return(lp)
+}
+
+lp_dbinom <- function(theta, d) {
+  lp <- 0
+  for (i in 1:length(theta)) 
+    lp[i] <- sum(dbinom(d$y, size = 1, prob = theta[i], log = TRUE))
+  return(lp)
+}
+
+lp(c(0.6, 0.7), data)
+lp_dbinom(c(0.6, 0.7), data)
+```
+
+## Grid Approximation
+```{r}
+library(ggplot2)
+n <- 250
+theta <- seq(0.001, 0.999, length.out = n)
+joint_model <- lp(theta = theta, data)
+joint_model <- exp(joint_model)
+post <- joint_model# / sum(joint_model)
+post <- sample(theta, size = 1e5, 
+               replace = TRUE, prob = post)
+post <- density(post)
+mle <- sum(data$y) / data$N
+qplot(post$x, post$y) + 
+  geom_vline(xintercept = mle, colour = "red") + theme_bw() + xlab("Theta") + ylab("")
+```
+
+## Fitting the model in Stan
+```{r, eval=FALSE}
+data {
+  int<lower=1> N;  
+  int<lower=0, upper=1> y[N];
+}
+parameters {
+  real<lower=0, upper=1> theta;
+}
+model {
+  theta ~ beta(1, 1)
+  y ~ bernoulli(theta);
+}
+```
+
+
+```{r}
+plot_dens <- function(theta, xintercept) {
+  p <- ggplot(data.frame(theta = theta), aes(x = theta)) + 
+    geom_line(stat = "density") 
+  p + geom_vline(xintercept = xintercept, colour = "red") + theme_minimal()
+}
+library(rstan)
+rstan_options(auto_write = TRUE)
+
+data <- list(N = 5, y = c(0, 1, 1, 0, 1))
+bernoulli_stan <- system.file('stan', 'bernoulli.stan', package = 'biostan')
+fit <- stan(file = bernoulli_stan, data = data, iter = 200, cores = 4)
+#fit <- stan(fit = fit, data = data, iter = 200, cores = 4)
+theta <- extract(fit, pars = c('theta'))
+plot_dens(theta$theta, xintercept = sum(data$y) / length(data$y))
+```
+
+## Simple Linear Regression
+### Stan Program
+```{r, eval=FALSE}
+data {
+  int<lower=1> N;
+  vector[N] x;
+  vector[N] y;
+}
+parameters {
+  real alpha;
+  real beta;
+  real<lower=0> sigma;
+} model {
+  sigma ~ cauchy(0, 2.5);
+  y ~ normal(alpha + beta * x, sigma);
+}
+```
+
+### Simulate Fake Data
+```{r, cache=TRUE}
+set.seed(123)
+N <- 1000
+a <- 0.5
+b <- 1.5
+sigma <- 2
+x <- seq(1, 10, length.out = N)
+y <- rnorm(N, a + b * x, sigma)
+p <- qplot(x, y, data = data.frame(x, y)) + theme_minimal()
+p
+```
+
+### Fit in Stan and Check Parameters
+```{r}
+# Notice that if R data matches Stan data you do not noo
+normal_stan <- system.file('stan', 'normal.stan', package = 'biostan')
+fit_1 <- stan(file = normal_stan, iter = 400, cores = 4)
+fit_1
+alpha <- extract(fit_1, pars = c('alpha'))$alpha
+beta <- extract(fit_1, pars = c('beta'))$beta
+plot_dens(alpha, a)
+plot_dens(beta, b)
+```
+
+
+## Robust Regression
+### Stan Program
+```{r, eval=FALSE}
+data {
+  int<lower=1> N;
+  vector[N] x;
+  vector[N] y;
+  real<lower = 0> nu; 
+}
+parameters {
+  real alpha;
+  real beta;
+  real<lower=0> sigma;
+ } model {
+   sigma ~ cauchy(0, 2.5);
+   y ~ student_t(nu, alpha + beta * x,  sigma);
+}
+```
+
+### Simulate Fake Data
+```{r, cache=TRUE}
+# compile Stan functions
+robust_sim_stan <- system.file('stan', 'robust_sim.stan', package = 'biostan')
+stan_functions <- stan_model(file = robust_sim_stan)
+
+# make Stan functions available in R
+expose_stan_functions(stan_functions)
+
+# Function dgp_rng is now available in R
+dgp_rng
+
+N <- 1000
+a <- 0.5
+b <- 1.5
+sigma <- 2
+nu <- 7
+x <- seq(1, 10, length.out = N)
+y <- dgp_rng(as.matrix(x), b, nu, sigma)
+p <- qplot(x, y, data = data.frame(x, y)) + theme_minimal()
+p
+```
+
+### Fit in Stan and Check Parameters
+```{r}
+# Notice that if R data matches Stan data you do not noo
+robust_stan <- system.file('stan', 'robust.stan', package = 'biostan')
+fit_2 <- stan(file = robust_stan, iter = 500, cores = 4)
+fit_2
+```

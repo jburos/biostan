@@ -1,0 +1,36 @@
+---
+title: "BioC 2016 Workshop"
+author: "Jacqueline Buros"
+date: "June 25, 2016"
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Outline {.bigger}
+
+- Intro: Stan for Bayesian inference (20m)
+- Example: Bernoulli model (15m)
+- Example: Linear regression (15m)
+- Example: Survival analysis (35m)
+- Example: Mutation signature deconvolution (35m)
+
+## Workshop package {.bigger}
+
+Download *updated* workshop materials from 
+
+`http://github.com/jburos/biostan`
+
+Create a new project & load this repository into your R session.
+
+## Bayesian analysis process {.bigger}
+
+- propose a model
+- evaluate model on simulated data
+- evaluate model on actual data 
+- draw inferences from the model
+- (update proposed model)
+
+
