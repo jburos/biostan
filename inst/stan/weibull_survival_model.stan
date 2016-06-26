@@ -76,12 +76,15 @@ model {
 generated quantities {
     real yhat_uncens[Nobs + Ncen];
     real log_lik[Nobs + Ncen];
+    real lp[Nobs + Ncen];
 
     for (i in 1:Nobs) {
+        lp[i] = mu + Xobs_bg[i,] * beta_bg;
         yhat_uncens[i] = weibull_rng(alpha, exp(-(mu + Xobs_bg[i,] * beta_bg)/alpha));
         log_lik[i] = weibull_lpdf(yobs[i] | alpha, exp(-(mu + Xobs_bg[i,] * beta_bg)/alpha));
     }
     for (i in 1:Ncen) {
+        lp[Nobs + i] = mu + Xcen_bg[i,] * beta_bg;
         yhat_uncens[Nobs + i] = weibull_rng(alpha, exp(-(mu + Xcen_bg[i,] * beta_bg)/alpha));
         log_lik[Nobs + i] = weibull_lccdf(ycen[i] | alpha, exp(-(mu + Xcen_bg[i,] * beta_bg)/alpha));
     }
