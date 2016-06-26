@@ -665,22 +665,24 @@ One nice thing about sampling from the full posterior is that we can compute pos
 To compute the probability of seeing a value of `r stringr::str_c('alpha >= ',test_alpha)`:
 
 ```{r}
-mean(pp_alpha >= test_alpha)
+min(mean(pp_alpha >= test_alpha), mean(pp_alpha <= test_alpha))
 ```
 
 And for `mu` (testing `r stringr::str_c('mu >= ', test_mu)`:
 
 ```{r}
-mean(pp_mu >= test_mu)
+min(mean(pp_mu >= test_mu), mean(pp_mu <= test_mu))
 ```
 
-The joint probability of seeing this combination of parameter values, however, isn't as encouraging:
+The joint probability of seeing this combination of parameter values, however, may not be as encouraging.
+
+We could calculate this by, for example:
 
 ```{r}
 mean(pp_mu >= test_mu & pp_alpha >= test_alpha)
 ```
 
-We would need more iterations in order to estimate this with greater precision.
+Though, you would want to adjust the direction of `<` or `>` depending on the observed values.
 
 ### Posterior predictive checks
 
