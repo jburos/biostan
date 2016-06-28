@@ -27,7 +27,7 @@ However, special consideration should be given to the installation of `rstan` an
 
 ### clang++ C++ compiler
 
-It is strongly recommended that you install & enable the clang++ C++ compiler on the system in addition to or instead of the more typical g++ compiler. The clang++ compiler will compile Stan models faster and with less memory, so you get get by with an Amazon AMI that has less RAM.
+It is strongly recommended that you install & enable the clang++ C++ compiler on the system in addition to or instead of the more typical g++ compiler. The clang++ compiler will compile Stan models faster and with less memory, so that you can get by with an Amazon AMI that has less RAM.
 
 To install it on Ubuntu, you can do
 
